@@ -15,10 +15,10 @@
 - [ ] **macOS signing + notarization** (Apple Developer Program). Workflow is ready;
   needs the `MACOS_*` / `APPLE_*` secrets. Until then, `.dmg` builds are ad-hoc signed.
 
-## Needs a GitHub repo
-- [ ] Create the GitHub repo (private is fine) and push; CI and releases only run there.
-- [ ] First CI run: confirms the app compiles with the real Wails tags on Linux/macOS.
-- [ ] First release run: confirms the macOS `.dmg`, Linux `.deb`/`.rpm`/AppImage build.
+## Release
+- [x] GitHub repo, CI green on Windows/Linux/macOS (app built with real Wails tags).
+- [x] First release: `v0.2.0-rc2` pre-release, all 15 artifacts + signed SHA256SUMS.
+- [ ] Promote to `v0.2.0` once the on-device tests below pass.
 
 ## Testing
 - [ ] Windows app end to end on two PCs: "Allow remote access" (UAC + wizard), connect,
