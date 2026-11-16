@@ -6,3 +6,4 @@ bin/
 /cmd/rmt-desk/build/bin/
 /cmd/rmt-desk/frontend/wailsjs/
 /cmd/rmt-desk/build/windows/installer/wails_tools.nsh
+/dist/

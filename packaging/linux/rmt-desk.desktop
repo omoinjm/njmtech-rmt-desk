@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=rmt-desk
+GenericName=Remote Desktop
+Comment=Remote desktop between your own devices over Tailscale
+Exec=rmt-desk
+Icon=rmt-desk
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=remote;desktop;vnc;tailscale;
+StartupWMClass=rmt-desk

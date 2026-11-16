@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- rmtd loads Cisco's OpenH264 dylib at runtime (downloaded from
+         Cisco, signed by Cisco or not at all). The hardened runtime would
+         refuse it; rmtd verifies the file's pinned SHA-256 itself before
+         loading. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

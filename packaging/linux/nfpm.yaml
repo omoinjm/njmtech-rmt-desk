@@ -1,0 +1,30 @@
+# nfpm config for the .deb and .rpm packages.
+# Env: VERSION (e.g. 0.2.0), ARCH (amd64|arm64). Run from the repo root with
+# the binaries staged in dist/pkg/ (nfpm doesn't expand env vars in paths).
+name: rmt-desk
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: rmt-desk maintainers
+description: |
+  Remote desktop between your own devices over your Tailscale tailnet.
+  rmt-desk is the app; rmtd is the host agent it installs as a systemd
+  user service when you allow remote access to this computer.
+contents:
+  - src: dist/pkg/rmt-desk
+    dst: /usr/bin/rmt-desk
+    file_info: { mode: 0755 }
+  - src: dist/pkg/rmtd
+    dst: /usr/bin/rmtd
+    file_info: { mode: 0755 }
+  - src: packaging/linux/rmt-desk.desktop
+    dst: /usr/share/applications/rmt-desk.desktop
+  - src: cmd/rmt-desk/build/appicon.png
+    dst: /usr/share/pixmaps/rmt-desk.png
+overrides:
+  deb:
+    depends: [libgtk-3-0, libwebkit2gtk-4.1-0]
+  rpm:
+    depends: [gtk3, webkit2gtk4.1]

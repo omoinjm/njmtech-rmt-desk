@@ -1,15 +1,21 @@
-# Builds release binaries natively on each OS (macOS input/capture need cgo),
-# signs them where credentials are configured, and publishes a GitHub release
-# with SHA-256 checksums, a Sigstore (keyless) signature over the checksums
-# and SLSA build provenance.
+# Builds release artifacts natively on each OS, signs them where credentials
+# are configured, and publishes a GitHub release with SHA-256 checksums, a
+# Sigstore (keyless) signature over the checksums and SLSA build provenance.
+#
+# Artifacts:
+#   rmt-desk_<tag>_windows_<arch>_setup.exe   app installer (includes rmtd)
+#   rmt-desk_<tag>_macos_universal.dmg        app (rmtd inside the bundle)
+#   rmt-desk_<tag>_linux_<arch>.deb / .rpm    app + rmtd
+#   rmt-desk_<tag>_linux_<arch>.AppImage      app, connect-only (no host)
+#   rmt-desk_<tag>_<os>_<arch>.tar.gz / .zip  command-line rmtd + rmt
 #
 # Optional repository secrets:
 #   WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD     Authenticode signing
 #   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD,
 #   MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_TEAM_ID,
 #   APPLE_APP_PASSWORD                                  codesign + notarization
-# Without them, the corresponding binaries are published unsigned (the
-# checksums are still Sigstore-signed and attested).
+# Without them, the corresponding files are published unsigned (macOS: ad-hoc
+# signed); the checksums are still Sigstore-signed and attested.
 name: release
 on:
   push:
@@ -18,8 +24,13 @@ on:
 permissions:
   contents: read
 
+env:
+  WAILS_VERSION: v2.17.1
+  NFPM_VERSION: v2.49.0
+
 jobs:
-  build:
+  # ---------- command-line tools (rmtd, rmt) ----------
+  cli:
     strategy:
       fail-fast: true
       matrix:
@@ -95,9 +106,10 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc"
           security list-keychains -d user -s "$kc"
-          for f in dist/bin/*; do
-            codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$f"
-          done
+          # rmtd loads the (hash-pinned) OpenH264 dylib: needs library-validation off.
+          codesign --force --options runtime --timestamp --entitlements packaging/macos/rmtd.entitlements \
+            --sign "$MACOS_SIGN_IDENTITY" dist/bin/rmtd
+          codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" dist/bin/rmt
           ditto -c -k dist/bin "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
@@ -117,12 +129,216 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.*
           if-no-files-found: error
 
+  # ---------- desktop app: Windows installer ----------
+  app-windows:
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: windows-latest
+    env:
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Tools
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          if ! command -v makensis >/dev/null; then choco install nsis -y --no-progress; fi
+          echo "C:\\Program Files (x86)\\NSIS" >> "$GITHUB_PATH"
+      - name: Build rmtd + app + installer
+        working-directory: cmd/rmt-desk
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          ver="${ver%%-*}" # NSIS needs a numeric x.y.z
+          sed -i "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"${ver}\"/" wails.json
+          mkdir -p build/bin
+          GOOS=windows GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o build/bin/rmtd.exe ../rmtd
+          wails build -platform windows/${{ matrix.arch }} -nsis -skipbindings -trimpath \
+            -ldflags "-X main.version=${GITHUB_REF_NAME}"
+      - name: Authenticode sign (app, rmtd, then rebuilt installer)
+        if: env.HAS_WIN_CERT == 'true'
+        shell: pwsh
+        working-directory: cmd/rmt-desk
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = "$env:RUNNER_TEMP\cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
+          function Sign($f) {
+            & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:WINDOWS_CERT_PASSWORD $f
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          Sign "build\bin\rmt-desk.exe"
+          Sign "build\bin\rmtd.exe"
+          # Re-pack the installer around the signed executables.
+          $arch = "${{ matrix.arch }}".ToUpper()
+          $bin = (Resolve-Path "build\bin\rmt-desk.exe").Path
+          & makensis "-DARG_WAILS_${arch}_BINARY=$bin" build\windows\installer\project.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Sign "build\bin\rmt-desk-${{ matrix.arch }}-setup.exe"
+          Remove-Item $pfx
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp "cmd/rmt-desk/build/bin/rmt-desk-${{ matrix.arch }}-setup.exe" \
+            "dist/rmt-desk_${GITHUB_REF_NAME}_windows_${{ matrix.arch }}_setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-windows-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------- desktop app: macOS .dmg ----------
+  app-macos:
+    runs-on: macos-latest
+    env:
+      HAS_MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build app (universal) with rmtd inside
+        working-directory: cmd/rmt-desk
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          ver="${GITHUB_REF_NAME#v}"
+          sed -i '' "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"${ver%%-*}\"/" wails.json
+          wails build -platform darwin/universal -skipbindings -trimpath -ldflags "-X main.version=${GITHUB_REF_NAME}"
+          for a in arm64 amd64; do
+            cc="clang"; [ $a = amd64 ] && cc="clang -arch x86_64"
+            GOOS=darwin GOARCH=$a CGO_ENABLED=1 CC="$cc" go build -trimpath \
+              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$RUNNER_TEMP/rmtd-$a" ../rmtd
+          done
+          lipo -create -output build/bin/rmt-desk.app/Contents/MacOS/rmtd "$RUNNER_TEMP/rmtd-arm64" "$RUNNER_TEMP/rmtd-amd64"
+      - name: Sign (Developer ID, or ad-hoc without a certificate)
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          app=cmd/rmt-desk/build/bin/rmt-desk.app
+          id="-"; opts=""
+          if [ "$HAS_MAC_CERT" = true ]; then
+            kc="$RUNNER_TEMP/build.keychain"; kcpw="$(uuidgen)"
+            echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p "$kcpw" "$kc"
+            security set-keychain-settings -lut 900 "$kc"
+            security unlock-keychain -p "$kcpw" "$kc"
+            security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc"
+            security list-keychains -d user -s "$kc"
+            rm -f "$RUNNER_TEMP/cert.p12"
+            id="$MACOS_SIGN_IDENTITY"; opts="--options runtime --timestamp"
+          fi
+          # Inside-out: rmtd (its own TCC identity), then the bundle.
+          codesign --force $opts --entitlements packaging/macos/rmtd.entitlements \
+            --identifier io.github.rmt-desk.rmtd --sign "$id" "$app/Contents/MacOS/rmtd"
+          codesign --force $opts --sign "$id" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+      - name: Build .dmg (+ notarize and staple)
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          mkdir -p dist "$RUNNER_TEMP/dmg"
+          cp -R cmd/rmt-desk/build/bin/rmt-desk.app "$RUNNER_TEMP/dmg/"
+          ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
+          dmg="dist/rmt-desk_${GITHUB_REF_NAME}_macos_universal.dmg"
+          hdiutil create -volname rmt-desk -srcfolder "$RUNNER_TEMP/dmg" -ov -format UDZO "$dmg"
+          if [ "$HAS_MAC_CERT" = true ]; then
+            codesign --timestamp --sign "$MACOS_SIGN_IDENTITY" "$dmg"
+            xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple "$dmg"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-macos
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------- desktop app: Linux packages ----------
+  app-linux:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     arch: amd64, uarch: x86_64,
+              tool_sha: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0,
+              rt_sha: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d }
+          - { os: ubuntu-24.04-arm, arch: arm64, uarch: aarch64,
+              tool_sha: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158,
+              rt_sha: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}
+      - name: Build app + rmtd
+        run: |
+          cd cmd/rmt-desk
+          wails build -platform linux/${{ matrix.arch }} -tags webkit2_41 -skipbindings -trimpath \
+            -ldflags "-X main.version=${GITHUB_REF_NAME}"
+          cd ../..
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o cmd/rmt-desk/build/bin/rmtd ./cmd/rmtd
+      - name: .deb and .rpm
+        run: |
+          mkdir -p dist/pkg
+          cp cmd/rmt-desk/build/bin/rmt-desk cmd/rmt-desk/build/bin/rmtd dist/pkg/
+          ver="${GITHUB_REF_NAME#v}"
+          for p in deb rpm; do
+            VERSION="$ver" ARCH=${{ matrix.arch }} \
+              nfpm package -f packaging/linux/nfpm.yaml -p $p -t "dist/rmt-desk_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}.$p"
+          done
+      - name: AppImage (connect-only; best effort)
+        run: |
+          base=https://github.com/AppImage
+          curl -fsSLo "$RUNNER_TEMP/appimagetool" "$base/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.uarch }}.AppImage"
+          curl -fsSLo "$RUNNER_TEMP/runtime" "$base/type2-runtime/releases/download/20251108/runtime-${{ matrix.uarch }}"
+          echo "${{ matrix.tool_sha }}  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          echo "${{ matrix.rt_sha }}  $RUNNER_TEMP/runtime" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          ad="$RUNNER_TEMP/AppDir"
+          mkdir -p "$ad/usr/bin"
+          cp cmd/rmt-desk/build/bin/rmt-desk "$ad/usr/bin/"
+          cp packaging/linux/rmt-desk.desktop "$ad/"
+          cp cmd/rmt-desk/build/appicon.png "$ad/rmt-desk.png"
+          ln -s usr/bin/rmt-desk "$ad/AppRun"
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=${{ matrix.uarch }} "$RUNNER_TEMP/appimagetool" \
+            --runtime-file "$RUNNER_TEMP/runtime" "$ad" \
+            "dist/rmt-desk_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-linux-${{ matrix.arch }}
+          path: dist/rmt-desk_*
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [cli, app-windows, app-macos, app-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write      # create the release
@@ -135,7 +351,7 @@ jobs:
           merge-multiple: true
 
       - name: Checksums
-        run: cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS && cat SHA256SUMS
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
 
       - uses: sigstore/cosign-installer@v3
 
@@ -144,7 +360,7 @@ jobs:
 
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-path: "dist/*.tar.gz, dist/*.zip"
+          subject-path: "dist/*.tar.gz, dist/*.zip, dist/*.exe, dist/*.dmg, dist/*.deb, dist/*.rpm, dist/*.AppImage"
 
       - name: Create release
         env:
