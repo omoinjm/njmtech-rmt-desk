@@ -19,8 +19,10 @@ import (
 
 	"rmt-desk/internal/audit"
 	"rmt-desk/internal/authz"
+	"rmt-desk/internal/capture"
 	"rmt-desk/internal/config"
 	"rmt-desk/internal/host"
+	"rmt-desk/internal/input"
 	"rmt-desk/internal/proto"
 	"rmt-desk/internal/tsnode"
 )
@@ -116,6 +118,13 @@ func cmdUp(dir, cfgPath string, args []string) error {
 	}
 	log.Printf("serving on tailnet as %q port %d", cfg.Hostname, cfg.Port)
 
+	desk := &host.Desktop{Capturer: capture.Screen{}, NewInjector: input.New}
+	if d := desk.Capturer.Displays(); len(d) == 0 {
+		log.Printf("WARNING: no displays detected; video will fail (headless / no DISPLAY?)")
+	} else {
+		log.Printf("displays: %d (primary %dx%d)", len(d), d[0].Width, d[0].Height)
+	}
+
 	srv := &host.Server{
 		Policy:   cfg.Policy,
 		Resolver: node,
@@ -123,10 +132,12 @@ func cmdUp(dir, cfgPath string, args []string) error {
 		HostName: cfg.Hostname,
 		Handlers: map[string]host.StreamHandler{
 			proto.StreamControl: func(_ context.Context, _ authz.Identity, c net.Conn) {
-				// Phase 1: control stream echoes (used by `rmt ping`).
+				// Control stream echoes for now (used by `rmt ping`).
 				defer c.Close()
 				io.Copy(c, c)
 			},
+			proto.StreamVideo: desk.Video,
+			proto.StreamInput: desk.Input,
 		},
 	}
 	return srv.Serve(ctx, ln)

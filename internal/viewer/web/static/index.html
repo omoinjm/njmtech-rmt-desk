@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rmt-desk</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<section id="home">
+  <header>
+    <h1>rmt-desk</h1>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+  <p class="muted">Hosts tagged <code>tag:rmt-host</code> on your tailnet.</p>
+  <ul id="hosts"></ul>
+  <form id="manual">
+    <input id="manual-host" placeholder="host name or tailnet IP" autocomplete="off" spellcheck="false">
+    <button type="submit">Connect</button>
+  </form>
+</section>
+
+<section id="session" hidden>
+  <nav id="bar">
+    <button id="disconnect" type="button" title="Disconnect">✕</button>
+    <span id="title"></span>
+    <label>Display <select id="display"></select></label>
+    <label>Quality <select id="quality">
+      <option value="40">Low</option><option value="70" selected>Balanced</option><option value="90">High</option>
+    </select></label>
+    <label>FPS <select id="fps">
+      <option>5</option><option>10</option><option selected>15</option><option>30</option>
+    </select></label>
+    <label><input id="fit" type="checkbox" checked> Fit</label>
+    <span id="status" class="muted"></span>
+  </nav>
+  <div id="stage"><canvas id="screen" tabindex="0"></canvas></div>
+</section>
+<script src="/app.js"></script>
+</body>
+</html>

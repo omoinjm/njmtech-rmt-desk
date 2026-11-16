@@ -43,7 +43,9 @@ func startServer(t *testing.T, r authz.Resolver) string {
 			},
 		},
 	}
-	go s.Serve(ctx, ln)
+	done := make(chan struct{})
+	go func() { s.Serve(ctx, ln); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
 	return ln.Addr().String()
 }
 

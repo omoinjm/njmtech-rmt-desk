@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"rmt-desk/internal/audit"
@@ -37,9 +38,16 @@ func (s *Server) logf(f string, a ...any) {
 	}
 }
 
-// Serve accepts connections until ln is closed or ctx is done.
+// Serve accepts connections until ln is closed or ctx is done. On return,
+// all sessions have been torn down.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
-	go func() { <-ctx.Done(); ln.Close() }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() { ln.Close() })
+	defer stop()
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -48,7 +56,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
-		go s.handleConn(ctx, c)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unhook := context.AfterFunc(ctx, func() { c.Close() })
+			defer unhook()
+			s.handleConn(ctx, c)
+		}()
 	}
 }
 
@@ -106,6 +120,10 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	if err != nil {
 		return
 	}
+	// Teardown order (LIFO): cancel handlers' ctx, close all streams, then
+	// wait for handlers to return.
+	var hwg sync.WaitGroup
+	defer hwg.Wait()
 	defer sess.Close()
 	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
@@ -120,6 +138,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			st.Close()
 			continue
 		}
-		go h(sctx, id, st)
+		hwg.Add(1)
+		go func() { defer hwg.Done(); h(sctx, id, st) }()
 	}
 }

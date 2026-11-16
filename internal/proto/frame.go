@@ -17,7 +17,7 @@ import (
 const Version = 1
 
 // MaxFrame bounds payload size so a peer cannot force huge allocations.
-const MaxFrame = 8 << 20 // 8 MiB
+const MaxFrame = 16 << 20 // 16 MiB (a 4K JPEG keyframe fits comfortably)
 
 type MsgType uint8
 
@@ -26,6 +26,11 @@ const (
 	MsgHelloAck MsgType = 2 // host -> viewer: HelloAck
 	MsgError    MsgType = 3 // either: Error
 	MsgOpen     MsgType = 4 // first frame on every yamux stream: StreamOpen
+
+	MsgVideoReq   MsgType = 10 // viewer -> host (video stream): VideoReq
+	MsgVideoInfo  MsgType = 11 // host -> viewer (video stream): VideoInfo
+	MsgVideoFrame MsgType = 12 // host -> viewer (video stream): binary tiles frame
+	MsgInput      MsgType = 13 // viewer -> host (input stream): input.Event JSON
 )
 
 var ErrFrameTooLarge = errors.New("proto: frame exceeds MaxFrame")
@@ -120,4 +125,24 @@ const (
 
 type StreamOpen struct {
 	Kind string `json:"kind"`
+}
+
+// VideoReq starts or reconfigures the video stream. Sending it again on the
+// same stream switches display / quality and forces a keyframe.
+type VideoReq struct {
+	Display int `json:"display"`
+	FPS     int `json:"fps"`     // 1-30
+	Quality int `json:"quality"` // JPEG 10-95
+}
+
+// VideoInfo is sent by the host whenever the display set or selection changes.
+type VideoInfo struct {
+	Displays []DisplayInfo `json:"displays"`
+	Current  int           `json:"current"`
+}
+
+type DisplayInfo struct {
+	Index  int `json:"index"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }

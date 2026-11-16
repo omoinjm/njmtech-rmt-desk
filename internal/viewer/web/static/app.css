@@ -1,0 +1,38 @@
+:root {
+  --bg: #f6f7f9; --fg: #16181d; --muted: #6b7280; --card: #fff; --line: #e3e5ea;
+  --accent: #2563eb; --ok: #16a34a; --bad: #9ca3af;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --fg: #e8eaee; --muted: #8b93a1; --card: #171a21; --line: #262a33; --accent: #60a5fa; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.muted { color: var(--muted); }
+
+#home { max-width: 640px; margin: 48px auto; padding: 0 16px; }
+#home header { display: flex; align-items: center; justify-content: space-between; }
+#home h1 { font-size: 22px; margin: 0; }
+#hosts { list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 8px; }
+#hosts li { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 14px; cursor: pointer; }
+#hosts li:hover { border-color: var(--accent); }
+#hosts li .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+#hosts li .dot.on { background: var(--ok); }
+#hosts li .name { font-weight: 600; }
+#hosts li .meta { margin-left: auto; color: var(--muted); font-size: 12px; }
+#manual { display: flex; gap: 8px; }
+#manual input { flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+
+#session { position: fixed; inset: 0; display: flex; flex-direction: column; background: #000; }
+#session[hidden] { display: none; }
+#bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 10px;
+  background: var(--card); border-bottom: 1px solid var(--line); }
+#bar select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+#title { font-weight: 600; }
+#status { margin-left: auto; font-size: 12px; }
+#stage { flex: 1; overflow: auto; display: flex; }
+#screen { margin: auto; outline: none; cursor: default; image-rendering: auto; }
+#stage.fit #screen { max-width: 100%; max-height: 100%; object-fit: contain; }

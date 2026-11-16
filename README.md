@@ -5,15 +5,16 @@ your Tailscale tailnet. No public ports, no third-party relay. Windows / Linux /
 
 - `rmtd` — host agent. Embeds Tailscale (`tsnet`) so it is its own tailnet node
   (`tag:rmt-host`); Tailscale does not need to be installed.
-- `rmt` — viewer (CLI now; Wails GUI next).
+- `rmt` — viewer. `rmt` opens a local web UI (127.0.0.1, one-time token) in your browser;
+  `rmt list` / `rmt ping` for the CLI.
 
 ## Status
 | Phase | Scope | State |
 |---|---|---|
 | 0 | REA research — see `docs/research/` | todo |
 | 1 | tsnet node, WhoIs allowlist, handshake, yamux streams, `rmt list/ping` | **done** |
-| 2 | Screen capture + JPEG tiles + input injection, Wails viewer | next |
-| 3 | Unattended service, password/TOTP, attended consent | |
+| 2 | Screen capture + dirty-tile JPEG video + mouse/keyboard, browser viewer | **done** (needs on-device testing) |
+| 3 | Unattended service, password/TOTP, attended consent | next |
 | 4 | Clipboard + file transfer | |
 | 5 | H.264/WebCodecs, multi-monitor, Wayland, signed releases | |
 
@@ -47,9 +48,21 @@ go build -o bin/ ./cmd/...
 TS_AUTHKEY=tskey-auth-... ./bin/rmtd up     # tagged, pre-approved key; only needed first run
 
 # on your laptop
+./bin/rmt            # opens the viewer in your browser
 ./bin/rmt list
 ./bin/rmt ping rmt-<hostname>
 ```
+
+## Platform notes (phase 2)
+| OS | Capture | Input | Requirements |
+|---|---|---|---|
+| Linux | X11 (XWayland ok) | XTEST | `DISPLAY` set; run inside the user's graphical session |
+| Windows | GDI | `SendInput` (scancodes) | run in the logged-in user's session (service mode = phase 3) |
+| macOS | ScreenCaptureKit | CGEvent | build natively with `CGO_ENABLED=1`; grant **Screen Recording** + **Accessibility** to `rmtd` |
+
+Keys are sent as physical key positions (`KeyboardEvent.code`), so the *host's*
+keyboard layout decides the character. Held keys/buttons are released automatically if
+the session drops. Only one viewer may control input at a time.
 
 ## Develop
 ```sh

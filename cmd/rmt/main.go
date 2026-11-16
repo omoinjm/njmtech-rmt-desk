@@ -9,7 +9,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -18,11 +20,13 @@ import (
 	"rmt-desk/internal/proto"
 	"rmt-desk/internal/tsnode"
 	"rmt-desk/internal/viewer"
+	"rmt-desk/internal/viewer/web"
 )
 
 const usage = `rmt - rmt-desk viewer
 
 Usage:
+  rmt [ui]          open the viewer in your browser (default)
   rmt list          list rmt hosts on your tailnet
   rmt ping <host>   connect, handshake, and measure round-trip over the session
 
@@ -34,8 +38,11 @@ Environment:
 func main() {
 	log.SetFlags(0)
 	if len(os.Args) < 2 {
+		os.Args = append(os.Args, "ui")
+	}
+	if a := os.Args[1]; a == "-h" || a == "--help" || a == "help" {
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return
 	}
 	dir := os.Getenv("RMT_DIR")
 	if dir == "" {
@@ -56,6 +63,8 @@ func main() {
 	defer node.Close()
 
 	switch os.Args[1] {
+	case "ui":
+		err = cmdUI(ctx, node)
 	case "list":
 		err = cmdList(ctx, node)
 	case "ping":
@@ -119,4 +128,33 @@ func cmdPing(ctx context.Context, n *tsnode.Node, host string) error {
 		time.Sleep(250 * time.Millisecond)
 	}
 	return nil
+}
+
+func cmdUI(ctx context.Context, n *tsnode.Node) error {
+	ws := &web.Server{
+		Dial:      n.Srv.Dial,
+		ListHosts: func(ctx context.Context) ([]tsnode.Peer, error) { return n.Hosts(ctx, config.HostTag) },
+	}
+	ln, url, err := ws.Listen()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("rmt viewer: %s\n(open this URL; it is single-user and only valid for this run)\n", url)
+	if err := openBrowser(url); err != nil {
+		fmt.Println("could not open a browser automatically:", err)
+	}
+	return ws.Serve(ctx, ln)
+}
+
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }
