@@ -2,12 +2,14 @@
 # are configured, and publishes a GitHub release with SHA-256 checksums, a
 # Sigstore (keyless) signature over the checksums and SLSA build provenance.
 #
-# Artifacts:
-#   rmt-desk_<tag>_windows_<arch>_setup.exe   app installer (includes rmtd)
-#   rmt-desk_<tag>_macos_universal.dmg        app (rmtd inside the bundle)
-#   rmt-desk_<tag>_linux_<arch>.deb / .rpm    app + rmtd
-#   rmt-desk_<tag>_linux_<arch>.AppImage      app, connect-only (no host)
-#   rmt-desk_<tag>_<os>_<arch>.tar.gz / .zip  command-line rmtd + rmt
+# Artifacts (names carry no version, so that
+# https://github.com/<repo>/releases/latest/download/<name> always works; the
+# version is the release's tag):
+#   rmt-desk_windows_<arch>_setup.exe   app installer (includes rmtd)
+#   rmt-desk_macos_universal.dmg        app (rmtd inside the bundle)
+#   rmt-desk_linux_<arch>.deb / .rpm    app + rmtd
+#   rmt-desk_linux_<arch>.AppImage      app, connect-only (no host)
+#   rmt-desk_<os>_<arch>.tar.gz / .zip  command-line rmtd + rmt
 #
 # Optional repository secrets:
 #   ES_USERNAME, ES_PASSWORD, ES_CREDENTIAL_ID,
@@ -134,7 +136,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name="rmt-desk_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          name="rmt-desk_${{ matrix.goos }}_${{ matrix.goarch }}"
           cp README.md dist/bin/
           cd dist/bin
           if [ "${{ matrix.goos }}" = windows ]; then
@@ -223,7 +225,7 @@ jobs:
         run: |
           mkdir -p dist
           cp "cmd/rmt-desk/build/bin/rmt-desk-${{ matrix.arch }}-setup.exe" \
-            "dist/rmt-desk_${GITHUB_REF_NAME}_windows_${{ matrix.arch }}_setup.exe"
+            "dist/rmt-desk_windows_${{ matrix.arch }}_setup.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: app-windows-${{ matrix.arch }}
@@ -288,7 +290,7 @@ jobs:
           mkdir -p dist "$RUNNER_TEMP/dmg"
           cp -R cmd/rmt-desk/build/bin/rmt-desk.app "$RUNNER_TEMP/dmg/"
           ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
-          dmg="dist/rmt-desk_${GITHUB_REF_NAME}_macos_universal.dmg"
+          dmg="dist/rmt-desk_macos_universal.dmg"
           # hdiutil intermittently fails with "Resource busy" on hosted runners.
           for i in 1 2 3 4 5; do
             hdiutil create -volname rmt-desk -srcfolder "$RUNNER_TEMP/dmg" -ov -format UDZO "$dmg" && break
@@ -346,7 +348,7 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           for p in deb rpm; do
             VERSION="$ver" ARCH=${{ matrix.arch }} \
-              nfpm package -f packaging/linux/nfpm.yaml -p $p -t "dist/rmt-desk_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}.$p"
+              nfpm package -f packaging/linux/nfpm.yaml -p $p -t "dist/rmt-desk_linux_${{ matrix.arch }}.$p"
           done
       - name: AppImage (connect-only; best effort)
         run: |
@@ -364,7 +366,7 @@ jobs:
           ln -s usr/bin/rmt-desk "$ad/AppRun"
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=${{ matrix.uarch }} "$RUNNER_TEMP/appimagetool" \
             --runtime-file "$RUNNER_TEMP/runtime" "$ad" \
-            "dist/rmt-desk_${GITHUB_REF_NAME}_linux_${{ matrix.arch }}.AppImage"
+            "dist/rmt-desk_linux_${{ matrix.arch }}.AppImage"
       - uses: actions/upload-artifact@v4
         with:
           name: app-linux-${{ matrix.arch }}

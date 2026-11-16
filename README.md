@@ -55,6 +55,24 @@ your Tailscale tailnet. No public ports, no third-party relay. Windows / Linux /
 ```
 Also enable **Tailnet Lock** so a compromised control plane can't add nodes.
 
+## Download
+Latest release: **[releases/latest](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest)**
+
+| System | App (recommended) | Command line only |
+|---|---|---|
+| **Windows** 10/11, x64 | [rmt-desk_windows_amd64_setup.exe](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_windows_amd64_setup.exe) | [zip](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_windows_amd64.zip) |
+| **Windows** on Arm | [rmt-desk_windows_arm64_setup.exe](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_windows_arm64_setup.exe) | [zip](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_windows_arm64.zip) |
+| **macOS** 11+, Intel & Apple Silicon | [rmt-desk_macos_universal.dmg](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_macos_universal.dmg) | [Apple Silicon](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_darwin_arm64.tar.gz) · [Intel](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_darwin_amd64.tar.gz) |
+| **Linux** x64 (Debian/Ubuntu) | [rmt-desk_linux_amd64.deb](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_amd64.deb) | [tar.gz](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_amd64.tar.gz) |
+| **Linux** x64 (Fedora/RHEL/openSUSE) | [rmt-desk_linux_amd64.rpm](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_amd64.rpm) | |
+| **Linux** Arm64 | [.deb](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_arm64.deb) · [.rpm](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_arm64.rpm) | [tar.gz](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_arm64.tar.gz) |
+| **Linux**, any distro (connect only) | [x64 AppImage](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_amd64.AppImage) · [Arm64 AppImage](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/rmt-desk_linux_arm64.AppImage) | |
+
+Builds aren't code-signed yet: Windows shows a SmartScreen warning ("More info → Run anyway")
+and **Smart App Control blocks the installer** where it's on; on macOS right-click the app →
+**Open** the first time. Every file is listed in
+[SHA256SUMS](https://github.com/omoinjm/njmtech-rmt-desk/releases/latest/download/SHA256SUMS) (Sigstore-signed; see [Releases](#releases) to verify).
+
 ## Install (easy)
 1. **Tailscale account** (free): sign in once at <https://login.tailscale.com>. You don't
    need the Tailscale app on any device. In the admin console, open **Access controls** and
@@ -62,9 +80,8 @@ Also enable **Tailnet Lock** so a compromised control plane can't add nodes.
    ```json
    "tagOwners": { "tag:rmt-host": ["autogroup:admin"] },
    ```
-2. **Install rmt-desk** on each device from the release page:
-   Windows `…_windows_amd64_setup.exe` · macOS `…_macos_universal.dmg` ·
-   Linux `…_linux_amd64.deb` / `.rpm` (the `.AppImage` can connect to others but can't be a host).
+2. **Install rmt-desk** on each device ([Download](#download) above). The Linux `.AppImage`
+   can connect to others but can't be a host; use the `.deb`/`.rpm` for that.
 3. **Open rmt-desk → Sign in with Tailscale.** Your devices that allow remote access
    show up under *Connect to a device*.
 4. **On a computer you want to reach**, flip *This device → Allow remote access*. A short
@@ -72,8 +89,12 @@ Also enable **Tailnet Lock** so a compromised control plane can't add nodes.
    password lets you in, and signs the computer in (a second Tailscale sign-in, as
    `tag:rmt-host`). Windows asks for administrator approval once.
 
-The person at a host always sees *This computer is being controlled by …* in the app, with
-a **Disconnect** button.
+The person at a host always sees *This computer is being controlled by …* in the app and in
+the tray icon's menu, with a **Disconnect** button.
+
+rmt-desk lives in the **system tray** (Windows, and Linux desktops with a tray): closing the
+window keeps it running there; click the icon to reopen it. On a host set to *Either*,
+the viewer can pick **Use a password instead** while it waits for approval.
 
 ## Quick start (command line)
 ```sh
@@ -164,9 +185,9 @@ provenance. Verify a download:
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/<owner>/rmt-desk/' \
+  --certificate-identity-regexp 'https://github.com/omoinjm/njmtech-rmt-desk/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
-gh attestation verify rmt-desk_*.tar.gz --repo <owner>/rmt-desk
+gh attestation verify rmt-desk_linux_amd64.deb --repo omoinjm/njmtech-rmt-desk
 ```
 
 ## Develop
