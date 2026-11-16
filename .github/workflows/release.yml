@@ -395,5 +395,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+          pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac  # v1.2.3-rc1
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag $pre \
             --title "$GITHUB_REF_NAME" --generate-notes dist/*
