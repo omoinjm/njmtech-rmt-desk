@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +26,8 @@ import (
 	"rmt-desk/internal/config"
 	"rmt-desk/internal/helper"
 	"rmt-desk/internal/host"
+	"rmt-desk/internal/hostctl"
+	"rmt-desk/internal/hostsetup"
 	"rmt-desk/internal/prompt"
 	"rmt-desk/internal/proto"
 	"rmt-desk/internal/tsnode"
@@ -77,7 +78,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, usage, dir)
 		os.Exit(2)
 	}
-	cfgPath := filepath.Join(dir, "rmtd.toml")
+	cfgPath := hostsetup.ConfigPath(dir)
 	cmd, args := os.Args[1], os.Args[2:]
 
 	var err error
@@ -119,29 +120,9 @@ func main() {
 	}
 }
 
-// stateDir: Windows services run as LocalSystem, so state lives in
-// %ProgramData% (locked down to SYSTEM+Administrators by SecureDir).
-// Elsewhere rmtd runs as the desktop user.
-func stateDir() string {
-	if d := os.Getenv("RMTD_DIR"); d != "" {
-		return d
-	}
-	if runtime.GOOS == "windows" {
-		pd := os.Getenv("ProgramData")
-		if pd == "" {
-			pd = `C:\ProgramData`
-		}
-		return filepath.Join(pd, "rmt-desk", "host")
-	}
-	return tsnode.DefaultStateDir("host")
-}
-
-func ensureDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return tsnode.SecureDir(dir)
-}
+func stateDir() string           { return hostsetup.StateDir() }
+func ensureDir(dir string) error { return hostsetup.EnsureDir(dir) }
+func codecDir(dir string) string { return hostsetup.CodecDir(dir) }
 
 // ---------- running ----------
 
@@ -222,7 +203,44 @@ func serve(ctx context.Context, dir, cfgPath string, verbose, serviceMode bool) 
 		HostName: cfg.Hostname,
 		Handlers: handlers,
 	}
+
+	// Local status/kill-switch channel for the rmt-desk app.
+	if cl, err := hostctl.Listen(dir); err != nil {
+		log.Printf("hostctl unavailable: %v", err)
+	} else {
+		go hostctl.Serve(ctx, cl, &ctlHandler{cfg: cfg, node: node, srv: srv})
+	}
 	return srv.Serve(ctx, ln)
+}
+
+type ctlHandler struct {
+	cfg  config.Host
+	node *tsnode.Node
+	srv  *host.Server
+}
+
+func (h *ctlHandler) Status(ctx context.Context) hostctl.Status {
+	st := hostctl.Status{
+		Version:     version,
+		HostName:    h.cfg.Hostname,
+		Mode:        string(h.cfg.Access.EffectiveMode()),
+		PasswordSet: h.cfg.Access.PasswordHash != "",
+		TOTPSet:     h.cfg.Access.TOTPSecret != "",
+		Allowed:     append(slices.Clone(h.cfg.Policy.AllowedLogins), h.cfg.Policy.AllowedTags...),
+		Sessions:    h.srv.Sessions(),
+	}
+	if ns, err := h.node.State(ctx); err == nil {
+		st.TailnetName, st.IP, st.Online = ns.Name, ns.IP, ns.Running
+	}
+	return st
+}
+
+func (h *ctlHandler) DisconnectAll() int {
+	n := h.srv.DisconnectAll()
+	if n > 0 {
+		log.Printf("host user disconnected %d session(s)", n)
+	}
+	return n
 }
 
 // backend is where screen/input/consent actually happen: in-process, or in
@@ -282,53 +300,12 @@ func (p *program) Stop(s service.Service) error {
 	return nil
 }
 
-// systemd user unit bound to the graphical session (so DISPLAY etc. exist).
-// systemd user unit bound to the graphical session (so DISPLAY etc. exist).
-// Syntax is kardianos/service's mini template engine.
-const systemdUserUnit = `[Unit]
-Description={{Description}}
-ConditionFileIsExecutable={{Path | cmdEscape}}
-PartOf=graphical-session.target
-After=graphical-session.target
-
-[Service]
-ExecStart={{Path | cmdEscape}}{{range Arguments}} {{. | cmd}}{{end}}
-Restart=always
-RestartSec=5
-{{range EnvVars}}{{.}}
-{{end}}
-[Install]
-WantedBy=graphical-session.target
-`
-
 func newService(dir string) (service.Service, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
-	c := &service.Config{
-		Name:        "rmtd",
-		DisplayName: "rmt-desk host agent",
-		Description: "Remote desktop over Tailscale (rmt-desk).",
-		Executable:  exe,
-		Arguments:   []string{"run"},
-		EnvVars:     map[string]string{"RMTD_DIR": dir},
-		Option:      service.KeyValue{},
-	}
-	switch runtime.GOOS {
-	case "windows":
-		c.Option["OnFailure"] = "restart"
-		c.Option["OnFailureDelayDuration"] = "5s"
-		c.Option["DelayedAutoStart"] = false
-	case "darwin":
-		c.Option["UserService"] = true // LaunchAgent: needs the user's GUI session
-		c.Option["RunAtLoad"] = true
-		c.Option["KeepAlive"] = true
-	default:
-		c.Option["UserService"] = true
-		c.Option["SystemdScript"] = systemdUserUnit
-	}
-	return service.New(&program{dir: dir, cfgPath: filepath.Join(dir, "rmtd.toml")}, c)
+	return hostsetup.NewService(dir, exe, &program{dir: dir, cfgPath: hostsetup.ConfigPath(dir)})
 }
 
 // cmdRun is the service entrypoint.
@@ -358,17 +335,12 @@ func openLog(path string) (*os.File, error) {
 }
 
 func cmdService(dir, action string) error {
-	s, err := newService(dir)
+	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	if action == "install" {
-		if _, err := os.Stat(filepath.Join(dir, "tsnet", "tailscaled.state")); err != nil {
-			return errors.New("not logged in to the tailnet yet: run 'rmtd up' once (with TS_AUTHKEY or the login URL), then install")
-		}
-	}
-	if err := service.Control(s, action); err != nil {
-		return fmt.Errorf("%s: %w", action, err)
+	if err := hostsetup.Control(dir, exe, action); err != nil {
+		return err
 	}
 	fmt.Printf("rmtd: %s ok\n", action)
 	if action == "install" {
@@ -392,45 +364,20 @@ func cmdStatus(dir, cfgPath string) error {
 	fmt.Printf("allowed logins: %v\nallowed tags:   %v\n", cfg.Policy.AllowedLogins, cfg.Policy.AllowedTags)
 	fmt.Printf("access mode:    %s (configured: %q)\npassword:       %v\nTOTP:           %v\npermissions:    %v\n",
 		cfg.Access.EffectiveMode(), cfg.Access.Mode, cfg.Access.PasswordHash != "", cfg.Access.TOTPSecret != "", cfg.Access.Permissions)
-	if s, err := newService(dir); err == nil {
-		st, err := s.Status()
-		names := map[service.Status]string{service.StatusRunning: "running", service.StatusStopped: "stopped"}
-		if err != nil {
-			fmt.Printf("service:        not installed\n")
-		} else if n, ok := names[st]; ok {
-			fmt.Printf("service:        %s\n", n)
-		}
+	if exe, err := os.Executable(); err == nil {
+		fmt.Printf("service:        %s\n", hostsetup.ServiceState(dir, exe))
 	}
 	return nil
 }
 
-func edit(dir, cfgPath string, f func(*config.Host) error) error {
-	if err := ensureDir(dir); err != nil {
-		return err
-	}
-	cfg, err := config.LoadHost(cfgPath)
-	if err != nil {
-		return err
-	}
-	if err := f(&cfg); err != nil {
-		return err
-	}
-	return config.SaveHost(cfgPath, cfg)
-}
+func edit(dir, _ string, f func(*config.Host) error) error { return hostsetup.Edit(dir, f) }
 
 func cmdEdit(dir, cfgPath, op, who string) error {
 	err := edit(dir, cfgPath, func(cfg *config.Host) error {
-		list := &cfg.Policy.AllowedLogins
-		if strings.HasPrefix(who, "tag:") {
-			list = &cfg.Policy.AllowedTags
-		}
 		if op == "allow" {
-			if !slices.Contains(*list, who) {
-				*list = append(*list, who)
-			}
-		} else {
-			*list = slices.DeleteFunc(*list, func(s string) bool { return s == who })
+			return hostsetup.Allow(cfg, who)
 		}
+		hostsetup.Revoke(cfg, who)
 		return nil
 	})
 	if err == nil {
@@ -452,7 +399,7 @@ func cmdPasswd(dir, cfgPath string, args []string) error {
 	fs.Parse(args)
 	if *clear {
 		return edit(dir, cfgPath, func(c *config.Host) error {
-			c.Access.PasswordHash, c.Access.TOTPSecret = "", ""
+			hostsetup.ClearPassword(c)
 			fmt.Println("password and TOTP removed; host is now attended-only (restart rmtd to apply)")
 			return nil
 		})
@@ -468,12 +415,10 @@ func cmdPasswd(dir, cfgPath string, args []string) error {
 	if pw != again {
 		return errors.New("passwords do not match")
 	}
-	h, err := access.HashPassword(pw)
-	if err != nil {
-		return err
-	}
 	return edit(dir, cfgPath, func(c *config.Host) error {
-		c.Access.PasswordHash = h
+		if err := hostsetup.SetPassword(c, pw); err != nil {
+			return err
+		}
 		fmt.Printf("password set; access mode is now %q (restart rmtd to apply)\n", c.Access.EffectiveMode())
 		return nil
 	})
@@ -491,16 +436,13 @@ func cmdTOTP(dir, cfgPath string, args []string) error {
 		})
 	}
 	return edit(dir, cfgPath, func(c *config.Host) error {
-		if c.Access.PasswordHash == "" {
-			return errors.New("set a password first: rmtd passwd")
-		}
-		sec, err := access.NewTOTPSecret()
+		sec, uri, err := hostsetup.NewTOTP(c)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: rmtd passwd", err)
 		}
 		fmt.Println("Add this to your authenticator app (it is shown only once):")
 		fmt.Println()
-		fmt.Println("  " + access.TOTPURI(sec, c.Hostname))
+		fmt.Println("  " + uri)
 		fmt.Println()
 		fmt.Println("  or enter the secret manually: " + sec)
 		fmt.Println()
@@ -508,10 +450,9 @@ func cmdTOTP(dir, cfgPath string, args []string) error {
 		if err != nil {
 			return err
 		}
-		if _, ok := access.VerifyTOTP(sec, strings.TrimSpace(code), time.Now()); !ok {
-			return errors.New("code did not match; TOTP not enabled (check the device clock)")
+		if err := hostsetup.EnableTOTP(c, sec, code); err != nil {
+			return fmt.Errorf("TOTP not enabled: %w", err)
 		}
-		c.Access.TOTPSecret = sec
 		fmt.Println("TOTP enabled (restart rmtd to apply)")
 		return nil
 	})
@@ -522,27 +463,16 @@ func cmdMode(dir, cfgPath string, args []string) error {
 		return errors.New("usage: rmtd mode attended|unattended|both")
 	}
 	m := access.Mode(args[0])
-	if m != access.Attended && m != access.Unattended && m != access.Both {
-		return fmt.Errorf("unknown mode %q", args[0])
-	}
 	return edit(dir, cfgPath, func(c *config.Host) error {
-		c.Access.Mode = m
+		if err := hostsetup.SetMode(c, m); err != nil {
+			return err
+		}
 		if m != access.Attended && c.Access.PasswordHash == "" {
 			fmt.Println("note: no password set, so the host stays attended-only until you run 'rmtd passwd'")
 		}
 		fmt.Printf("mode: %s (restart rmtd to apply)\n", m)
 		return nil
 	})
-}
-
-// codecDir holds the OpenH264 library. On Windows it sits outside the
-// admin-only state dir (the per-user helper must read it) with a DACL that
-// lets users read but only admins write; Load also re-verifies its hash.
-func codecDir(stateDir string) string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(filepath.Dir(stateDir), "codecs")
-	}
-	return filepath.Join(stateDir, "codecs")
 }
 
 func cmdCodec(dir string, args []string) error {

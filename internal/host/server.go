@@ -31,6 +31,58 @@ type Server struct {
 	HostName string
 	Handlers map[string]StreamHandler // keyed by proto.Stream* kind
 	Logf     func(string, ...any)
+
+	mu       sync.Mutex
+	sessions map[*liveSession]struct{}
+}
+
+// SessionInfo describes an admitted session, for local status display.
+type SessionInfo struct {
+	Peer    string    `json:"peer"` // identity, e.g. "you@example.com (laptop)"
+	Since   time.Time `json:"since"`
+	Granted []string  `json:"granted"`
+}
+
+type liveSession struct {
+	info SessionInfo
+	conn net.Conn
+}
+
+// Sessions lists the sessions currently admitted.
+func (s *Server) Sessions() []SessionInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]SessionInfo, 0, len(s.sessions))
+	for ls := range s.sessions {
+		out = append(out, ls.info)
+	}
+	slices.SortFunc(out, func(a, b SessionInfo) int { return a.Since.Compare(b.Since) })
+	return out
+}
+
+// DisconnectAll ends every admitted session (the host user's kill switch)
+// and returns how many were ended.
+func (s *Server) DisconnectAll() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ls := range s.sessions {
+		ls.conn.Close()
+	}
+	return len(s.sessions)
+}
+
+func (s *Server) track(ls *liveSession) (untrack func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions == nil {
+		s.sessions = map[*liveSession]struct{}{}
+	}
+	s.sessions[ls] = struct{}{}
+	return func() {
+		s.mu.Lock()
+		delete(s.sessions, ls)
+		s.mu.Unlock()
+	}
 }
 
 func (s *Server) logf(f string, a ...any) {
@@ -130,6 +182,8 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	s.Audit.Write(audit.Event{Kind: "connect", Peer: id.String(), Remote: remote,
 		Detail: fmt.Sprintf("%s granted=%v", hello.Client, granted)})
 	start := time.Now()
+	untrack := s.track(&liveSession{info: SessionInfo{Peer: id.String(), Since: start, Granted: granted}, conn: c})
+	defer untrack()
 	defer func() {
 		s.Audit.Write(audit.Event{Kind: "disconnect", Peer: id.String(), Remote: remote,
 			Detail: time.Since(start).Round(time.Second).String()})

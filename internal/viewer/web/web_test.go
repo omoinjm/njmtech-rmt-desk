@@ -63,6 +63,7 @@ type env struct {
 	inj              *rec
 	hostCB, viewerCB *clipboard.Memory
 	hostDir          string
+	srv              *Server
 }
 
 // setup starts a fake host (plain TCP) and the web bridge; returns the
@@ -106,7 +107,9 @@ func setupEnv(t *testing.T) *env {
 		},
 		NewClipboard: func() (clipboard.Clipboard, error) { return e.viewerCB, nil },
 		Logf:         t.Logf,
+		EmbedOrigins: []string{"wails://wails"},
 	}
+	e.srv = ws
 	ln, url, err := ws.Listen()
 	if err != nil {
 		t.Fatal(err)

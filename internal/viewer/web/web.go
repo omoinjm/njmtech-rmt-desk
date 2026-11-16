@@ -5,6 +5,13 @@
 // Local-only hardening: random per-run token exchanged for an HttpOnly,
 // SameSite=Strict cookie; Host header pinned to the loopback address (DNS
 // rebinding); websocket same-origin check.
+//
+// Embedded mode (the rmt-desk app): the UI is served by the app's web view,
+// so the page is cross-origin to this server. Only the session websocket is
+// used, authenticated by the same per-run token (sent as a websocket
+// subprotocol, which the app hands to the page through a native binding)
+// and an exact match on one of EmbedOrigins. Everything else goes through
+// the exported methods, called in-process.
 package web
 
 import (
@@ -15,12 +22,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"mime"
 	"net"
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +55,9 @@ type Server struct {
 	// NewClipboard opens the viewer machine's clipboard (nil disables sync).
 	NewClipboard func() (clipboard.Clipboard, error)
 	Logf         func(string, ...any)
+	// EmbedOrigins enables embedded mode for these exact page origins
+	// (e.g. "wails://wails"). Empty: browser mode only.
+	EmbedOrigins []string
 
 	token string
 	addr  string
@@ -74,11 +86,20 @@ func (s *Server) dropSession(id string) {
 }
 
 func (s *Server) session(r *http.Request) (*viewer.Session, bool) {
+	return s.lookup(r.URL.Query().Get("sid"))
+}
+
+func (s *Server) lookup(sid string) (*viewer.Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess, ok := s.sessions[r.URL.Query().Get("sid")]
+	sess, ok := s.sessions[sid]
 	return sess, ok
 }
+
+// WSURL is the session websocket URL and Subprotocol the token-bearing
+// subprotocol an embedded page must offer. Valid after Listen.
+func (s *Server) WSURL() string       { return "ws://" + s.addr + "/ws" }
+func (s *Server) Subprotocol() string { return "rmt." + s.token }
 
 func (s *Server) logf(f string, a ...any) {
 	if s.Logf != nil {
@@ -109,7 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /app.js", s.auth(http.HandlerFunc(s.asset)))
 	mux.Handle("GET /app.css", s.auth(http.HandlerFunc(s.asset)))
 	mux.Handle("GET /api/hosts", s.auth(http.HandlerFunc(s.hosts)))
-	mux.Handle("GET /ws", s.auth(http.HandlerFunc(s.ws)))
+	mux.HandleFunc("GET /ws", s.ws) // authenticates itself (cookie or embedded token)
 	mux.Handle("GET /api/files", s.auth(http.HandlerFunc(s.fileList)))
 	mux.Handle("GET /api/download", s.auth(http.HandlerFunc(s.download)))
 	mux.Handle("POST /api/upload", s.auth(http.HandlerFunc(s.upload)))
@@ -213,6 +234,39 @@ type msg struct {
 	Code  string          `json:"code,omitempty"`
 }
 
+var errUnauthorized = errors.New("unauthorized")
+
+// acceptWS authenticates and upgrades: browser mode (cookie + same-origin)
+// or embedded mode (exact origin + token subprotocol).
+func (s *Server) acceptWS(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	if s.authed(r) {
+		return websocket.Accept(w, r, nil) // nil opts => same-origin enforced
+	}
+	if s.embedAuthed(r) {
+		return websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true, // origin checked exactly by embedAuthed
+			Subprotocols:       []string{s.Subprotocol()},
+		})
+	}
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return nil, errUnauthorized
+}
+
+func (s *Server) embedAuthed(r *http.Request) bool {
+	if len(s.EmbedOrigins) == 0 || !slices.Contains(s.EmbedOrigins, r.Header.Get("Origin")) {
+		return false
+	}
+	want := []byte(s.Subprotocol())
+	for _, h := range r.Header.Values("Sec-WebSocket-Protocol") {
+		for _, p := range strings.Split(h, ",") {
+			if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(p)), want) == 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // connectReq is the browser's first message; credentials travel over the
 // websocket, never in a URL.
 type connectReq struct {
@@ -226,7 +280,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing host", http.StatusBadRequest)
 		return
 	}
-	wc, err := websocket.Accept(w, r, nil) // nil opts => same-origin enforced
+	wc, err := s.acceptWS(w, r)
 	if err != nil {
 		return
 	}
@@ -398,22 +452,78 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 
 // ---------- file transfer (exchange folder on the host) ----------
 
-func (s *Server) fileList(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
+// ErrNoSession: sid doesn't name a live session.
+var ErrNoSession = errors.New("no such session")
+
+// ListFiles lists the host's exchange folder for session sid.
+func (s *Server) ListFiles(sid string) (proto.FileList, error) {
+	sess, ok := s.lookup(sid)
 	if !ok {
-		http.Error(w, "no such session", http.StatusNotFound)
-		return
+		return proto.FileList{}, ErrNoSession
 	}
 	st, err := sess.Open(proto.StreamFiles)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return proto.FileList{}, err
 	}
 	defer st.Close()
 	st.SetDeadline(time.Now().Add(15 * time.Second))
 	l, err := files.List(st)
 	if err != nil {
-		http.Error(w, remoteMsg(err), http.StatusBadGateway)
+		return l, errors.New(remoteMsg(err))
+	}
+	return l, nil
+}
+
+// UploadFile sends size bytes from r to the host's exchange folder as name.
+// Cancelling ctx aborts the transfer.
+func (s *Server) UploadFile(ctx context.Context, sid, name string, size int64, r io.Reader) (proto.FileDone, error) {
+	sess, ok := s.lookup(sid)
+	if !ok {
+		return proto.FileDone{}, ErrNoSession
+	}
+	st, err := sess.Open(proto.StreamFiles)
+	if err != nil {
+		return proto.FileDone{}, err
+	}
+	defer st.Close()
+	stop := context.AfterFunc(ctx, func() { st.Close() })
+	defer stop()
+	done, err := files.Put(st, name, size, r)
+	if err != nil {
+		return done, errors.New(remoteMsg(err))
+	}
+	s.logf("uploaded %s (%d bytes, sha256 %s)", done.Name, done.Size, done.SHA256[:12])
+	return done, nil
+}
+
+// DownloadFile streams the host file name into w (onStart gets its size
+// first). A checksum mismatch at the end returns an error: discard w.
+func (s *Server) DownloadFile(ctx context.Context, sid, name string, onStart func(proto.FileAck), w io.Writer) error {
+	sess, ok := s.lookup(sid)
+	if !ok {
+		return ErrNoSession
+	}
+	st, err := sess.Open(proto.StreamFiles)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	stop := context.AfterFunc(ctx, func() { st.Close() })
+	defer stop()
+	if _, err := files.Get(st, name, onStart, w); err != nil {
+		return errors.New(remoteMsg(err))
+	}
+	return nil
+}
+
+func (s *Server) fileList(w http.ResponseWriter, r *http.Request) {
+	l, err := s.ListFiles(r.URL.Query().Get("sid"))
+	if errors.Is(err, ErrNoSession) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
