@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "rmt-desk",
+  "outputfilename": "rmt-desk",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "wailsjsdir": "",
+  "author": {
+    "name": "rmt-desk"
+  },
+  "info": {
+    "companyName": "rmt-desk",
+    "productName": "rmt-desk",
+    "productVersion": "0.2.0",
+    "copyright": "",
+    "comments": "Remote desktop over Tailscale"
+  },
+  "nsisType": "multiple"
+}

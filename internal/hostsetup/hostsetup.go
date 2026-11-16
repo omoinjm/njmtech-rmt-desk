@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rmt-desk/internal/access"
+	"rmt-desk/internal/codec/h264"
 	"rmt-desk/internal/config"
 	"rmt-desk/internal/tsnode"
 
@@ -303,7 +304,11 @@ const (
 )
 
 // ServiceState reports whether the rmtd service is installed and running.
+// It needs no privileges.
 func ServiceState(dir, exe string) string {
+	if st, ok := serviceStateNative(); ok {
+		return st
+	}
 	s, err := NewService(dir, exe, nil)
 	if err != nil {
 		return NotInstalled
@@ -355,4 +360,28 @@ func Disable(dir, exe string) error {
 	}
 	_ = Control(dir, exe, "stop")
 	return Control(dir, exe, "uninstall")
+}
+
+// ---------- video codec ----------
+
+// InstallCodec downloads and verifies Cisco's OpenH264 into CodecDir.
+func InstallCodec(ctx context.Context, dir string) (string, error) {
+	cdir := CodecDir(dir)
+	if err := os.MkdirAll(cdir, 0o755); err != nil {
+		return "", err
+	}
+	if err := tsnode.SecureSharedDir(cdir); err != nil {
+		return "", err
+	}
+	return h264.Install(ctx, cdir)
+}
+
+// CodecInstalled reports whether the OpenH264 library is present.
+func CodecInstalled(dir string) bool {
+	p, err := h264.LibPath(CodecDir(dir))
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
 }

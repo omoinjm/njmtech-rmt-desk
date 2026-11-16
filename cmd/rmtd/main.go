@@ -486,16 +486,10 @@ func cmdCodec(dir string, args []string) error {
 	}
 	switch args[0] {
 	case "install":
-		if err := os.MkdirAll(cdir, 0o755); err != nil {
-			return err
-		}
-		if err := tsnode.SecureSharedDir(cdir); err != nil {
-			return err
-		}
 		fmt.Println("Downloading OpenH264 from Cisco (ciscobinary.openh264.org)…")
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		path, err := h264.Install(ctx, cdir)
+		path, err := hostsetup.InstallCodec(ctx, dir)
 		if err != nil {
 			return err
 		}

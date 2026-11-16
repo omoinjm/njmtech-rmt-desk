@@ -23,10 +23,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"mime"
 	"net"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -127,8 +129,7 @@ func (s *Server) Listen() (net.Listener, string, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
-	mux.Handle("GET /app.js", s.auth(http.HandlerFunc(s.asset)))
-	mux.Handle("GET /app.css", s.auth(http.HandlerFunc(s.asset)))
+	mux.Handle("GET /{file}", s.auth(http.HandlerFunc(s.asset))) // scripts and styles
 	mux.Handle("GET /api/hosts", s.auth(http.HandlerFunc(s.hosts)))
 	mux.HandleFunc("GET /ws", s.ws) // authenticates itself (cookie or embedded token)
 	mux.Handle("GET /api/files", s.auth(http.HandlerFunc(s.fileList)))
@@ -156,7 +157,7 @@ func (s *Server) hostCheck(h http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' blob:; connect-src 'self' ws://"+s.addr+"; frame-ancestors 'none'")
+			"default-src 'self'; img-src 'self' blob: data:; connect-src 'self' ws://"+s.addr+"; frame-ancestors 'none'")
 		h.ServeHTTP(w, r)
 	})
 }
@@ -199,14 +200,15 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Path[1:]
+	name := r.PathValue("file")
+	ct := map[string]string{".js": "text/javascript", ".css": "text/css"}[path.Ext(name)]
 	b, err := static.ReadFile("static/" + name)
-	if err != nil {
+	if ct == "" || err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	ct := map[string]string{"app.js": "text/javascript", "app.css": "text/css"}[name]
 	w.Header().Set("Content-Type", ct+"; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Write(b)
 }
 
@@ -605,4 +607,13 @@ func remoteMsg(err error) string {
 		return re.Err.Message
 	}
 	return err.Error()
+}
+
+// Assets is the UI (index.html, scripts, styles) for embedding in the app.
+func Assets() fs.FS {
+	sub, err := fs.Sub(static, "static")
+	if err != nil {
+		panic(err)
+	}
+	return sub
 }

@@ -3,66 +3,230 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>rmt-desk</title>
-<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
 </head>
 <body>
-<section id="home">
-  <header>
-    <h1>rmt-desk</h1>
-    <button id="refresh" type="button">Refresh</button>
-  </header>
-  <p class="muted">Hosts tagged <code>tag:rmt-host</code> on your tailnet.</p>
-  <ul id="hosts"></ul>
-  <form id="manual">
-    <input id="manual-host" placeholder="host name or tailnet IP" autocomplete="off" spellcheck="false">
-    <button type="submit">Connect</button>
-  </form>
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-windows" viewBox="0 0 24 24"><path d="M4 5.5l7-1v7H4zM13 4.2l7-1.2v8.5h-7zM4 12.5h7v7l-7-1zM13 12.5h7V21l-7-1.2z"/></symbol>
+  <symbol id="i-apple" viewBox="0 0 24 24"><path d="M16 3c0 1.6-1.3 3-2.9 3C13 4.4 14.4 3 16 3zM12 7.5c1 0 2-.8 3.2-.8 1.4 0 2.6.7 3.3 1.9-2.8 1.6-2.3 5.7.5 6.8-.5 1.4-1.2 2.7-2 3.8-.8 1-1.6 1.8-2.6 1.8s-1.4-.6-2.5-.6-1.6.6-2.5.6c-1 0-1.8-.9-2.6-1.9C5 16.7 4.5 12.6 6 10.2c.8-1.4 2.1-2.2 3.4-2.2 1.1 0 1.8.8 2.6.8z"/></symbol>
+  <symbol id="i-linux" viewBox="0 0 24 24"><path d="M12 3c-2 0-3 1.7-3 4v3c-1.5 1.6-3 3.8-3 6.2 0 .8.2 1.4.5 1.8L5 20h4.5c.7.6 1.6 1 2.5 1s1.8-.4 2.5-1H19l-1.5-2c.3-.4.5-1 .5-1.8 0-2.4-1.5-4.6-3-6.2V7c0-2.3-1-4-3-4z"/><path d="M10.5 8h.01M13.5 8h.01"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/><path d="M9 12h6M12 9v6"/></symbol>
+  <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+</svg>
+
+<!-- First run in the app: sign this app in to the tailnet -->
+<section id="signin" class="view center" hidden>
+  <div class="card narrow">
+    <div class="logo"><svg><use href="#i-monitor"/></svg></div>
+    <h1>Welcome to rmt-desk</h1>
+    <p class="muted">Remote desktop between your own devices, over your private Tailscale network. Nothing is exposed to the internet.</p>
+    <button id="signin-btn" class="primary big" type="button">Sign in with Tailscale</button>
+    <p id="signin-status" class="muted small" role="status"></p>
+  </div>
 </section>
 
-<section id="session" hidden>
+<section id="home" class="view" hidden>
+  <header class="topbar">
+    <div class="brand"><svg><use href="#i-monitor"/></svg> rmt-desk</div>
+    <div id="me" class="chip" hidden><svg><use href="#i-user"/></svg><span></span></div>
+  </header>
+  <main class="home-grid">
+    <section id="device" class="card" hidden>
+      <div class="card-head">
+        <h2>This device</h2>
+        <label class="switch" title="Allow remote access to this computer">
+          <input id="host-toggle" type="checkbox"><span></span>
+        </label>
+      </div>
+      <div id="device-body"></div>
+    </section>
+
+    <section id="connect" class="card">
+      <div class="card-head"><h2>Connect to a device</h2>
+        <button id="refresh" class="icon" type="button" title="Refresh"><svg><use href="#i-refresh"/></svg></button>
+      </div>
+      <form id="manual" class="search">
+        <svg><use href="#i-search"/></svg>
+        <input id="manual-host" placeholder="Search, or type a host name or tailnet IP" autocomplete="off" spellcheck="false" aria-label="Host">
+        <button class="primary" type="submit">Connect</button>
+      </form>
+      <div id="recent-wrap" hidden>
+        <h3>Recent</h3>
+        <ul id="recent" class="chips"></ul>
+      </div>
+      <h3>Your devices</h3>
+      <ul id="hosts" class="device-list"></ul>
+    </section>
+  </main>
+</section>
+
+<section id="session" class="view" hidden>
   <nav id="bar">
-    <button id="disconnect" type="button" title="Disconnect">✕</button>
+    <button id="disconnect" class="icon" type="button" title="Disconnect"><svg><use href="#i-back"/></svg></button>
+    <span id="conn-dot" class="dot"></span>
     <span id="title"></span>
-    <label>Display <select id="display"></select></label>
-    <label>Quality <select id="quality">
-      <option value="40">Low</option><option value="70" selected>Balanced</option><option value="90">High</option>
+    <span id="status" class="muted small"></span>
+    <span class="spacer"></span>
+    <label class="sel" title="Display"><svg><use href="#i-monitor"/></svg><select id="display"></select></label>
+    <label class="sel" title="Picture quality"><select id="quality">
+      <option value="40">Fast</option><option value="70" selected>Balanced</option><option value="90">Sharp</option>
     </select></label>
-    <label>Codec <select id="codec">
-      <option value="auto" selected>Auto</option><option value="tiles">JPEG tiles</option>
+    <label class="sel" title="Frames per second"><select id="fps">
+      <option value="5">5 fps</option><option value="10">10 fps</option><option value="15" selected>15 fps</option><option value="30">30 fps</option>
     </select></label>
-    <label>FPS <select id="fps">
-      <option>5</option><option>10</option><option selected>15</option><option>30</option>
+    <label class="sel" title="Video codec"><select id="codec">
+      <option value="auto" selected>Auto</option><option value="tiles">JPEG</option>
     </select></label>
-    <label><input id="fit" type="checkbox" checked> Fit</label>
-    <label title="Sync the clipboard between this computer and the host"><input id="clip" type="checkbox" checked> Clipboard</label>
-    <button id="files-btn" type="button">Files</button>
-    <span id="status" class="muted"></span>
+    <button id="fit" class="icon on" type="button" title="Fit to window"><svg><use href="#i-fit"/></svg></button>
+    <button id="clip" class="icon on" type="button" title="Clipboard sync"><svg><use href="#i-clipboard"/></svg></button>
+    <button id="files-btn" class="icon" type="button" title="Files"><svg><use href="#i-folder"/></svg></button>
+    <button id="stats-btn" class="icon" type="button" title="Connection stats"><svg><use href="#i-gauge"/></svg></button>
+    <button id="full" class="icon" type="button" title="Full screen"><svg><use href="#i-expand"/></svg></button>
   </nav>
   <div id="main">
-    <div id="stage"><canvas id="screen" tabindex="0"></canvas><div id="drop" hidden>Drop to send to host</div></div>
+    <div id="stage" class="fit">
+      <canvas id="screen" tabindex="0"></canvas>
+      <div id="stats" hidden></div>
+      <div id="drop" hidden><svg><use href="#i-upload"/></svg>Drop to send to the remote computer</div>
+      <div id="overlay" hidden>
+        <div class="spinner"></div>
+        <p id="overlay-msg"></p>
+        <div class="row"><button id="overlay-retry" class="primary" type="button" hidden>Reconnect</button>
+          <button id="overlay-cancel" type="button">Cancel</button></div>
+      </div>
+    </div>
     <aside id="files" hidden>
-      <header>
-        <strong>Host folder</strong>
-        <button id="files-refresh" type="button" title="Refresh">↻</button>
-      </header>
-      <p id="files-dir" class="muted"></p>
-      <label class="upload">Send files… <input id="upload" type="file" multiple hidden></label>
-      <ul id="transfers"></ul>
-      <ul id="file-list"></ul>
+      <div class="card-head"><h2>Files</h2>
+        <button id="files-close" class="icon" type="button" title="Close"><svg><use href="#i-x"/></svg></button></div>
+      <p class="muted small">Exchange folder on the remote computer: <span id="files-dir"></span></p>
+      <button id="upload-btn" class="primary" type="button"><svg><use href="#i-upload"/></svg> Send files…</button>
+      <input id="upload" type="file" multiple hidden>
+      <ul id="transfers" class="list"></ul>
+      <div class="card-head"><h3>On the remote computer</h3>
+        <button id="files-refresh" class="icon" type="button" title="Refresh"><svg><use href="#i-refresh"/></svg></button></div>
+      <ul id="file-list" class="list"></ul>
     </aside>
   </div>
-  <form id="auth" hidden>
-    <h2>Unattended access</h2>
+  <form id="auth" class="modal" hidden>
+    <h2><svg><use href="#i-shield"/></svg> Unattended access</h2>
     <p id="auth-msg" class="muted"></p>
     <label>Password <input id="auth-pw" type="password" autocomplete="current-password"></label>
-    <label>Authenticator code <input id="auth-totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="if enrolled"></label>
+    <label>Authenticator code <input id="auth-totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="if you set one up"></label>
     <div class="row">
-      <button type="submit">Connect</button>
-      <button type="button" id="auth-ask">Ask host user instead</button>
+      <button type="submit" class="primary">Connect</button>
+      <button type="button" id="auth-ask">Ask someone there instead</button>
     </div>
   </form>
 </section>
-<script src="/app.js"></script>
+
+<!-- Host setup wizard (elevated window on Windows; in the main window elsewhere) -->
+<section id="setup" class="view" hidden>
+  <header class="topbar">
+    <div class="brand"><svg><use href="#i-shield"/></svg> Allow remote access to this computer</div>
+  </header>
+  <main class="wizard">
+    <ol id="steps" class="steps">
+      <li data-step="1">Who</li><li data-step="2">Access</li><li data-step="3">Sign in</li><li data-step="4">Finish</li>
+    </ol>
+
+    <div class="step card" data-step="1">
+      <h2>Who may connect?</h2>
+      <p class="muted">Tailnet logins (like <code>you@gmail.com</code>) or ACL tags (like <code>tag:ops</code>). Nobody else can connect, even from inside your tailnet.</p>
+      <ul id="allow-list" class="chips editable"></ul>
+      <form id="allow-form" class="row">
+        <input id="allow-input" placeholder="you@example.com" autocomplete="off" spellcheck="false" aria-label="Login or tag">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+
+    <div class="step card" data-step="2" hidden>
+      <h2>How are connections approved?</h2>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="mode" value="attended">
+          <span><strong>Ask me each time</strong><small>Someone at this computer clicks Allow.</small></span></label>
+        <label class="choice"><input type="radio" name="mode" value="unattended">
+          <span><strong>Password only</strong><small>For when nobody is here. No prompt.</small></span></label>
+        <label class="choice"><input type="radio" name="mode" value="both">
+          <span><strong>Either</strong><small>A password lets you straight in; without it, ask.</small></span></label>
+      </div>
+      <form id="pw-section">
+        <label>Password <input id="pw1" type="password" autocomplete="new-password" placeholder="at least 10 characters"></label>
+        <label>Again <input id="pw2" type="password" autocomplete="new-password"></label>
+        <label id="pw-clear-wrap" class="inline" hidden><input id="pw-clear" type="checkbox"> Remove the current password</label>
+      </form>
+      <label class="inline"><input id="codec-opt" type="checkbox" checked> Smoother video with H.264 (downloads Cisco's free OpenH264)</label>
+      <div id="totp-section" hidden>
+        <h3>Authenticator app (optional)</h3>
+        <p id="totp-state" class="muted small"></p>
+        <button id="totp-begin" type="button">Set up an authenticator code</button>
+        <div id="totp-enroll" hidden>
+          <img id="totp-qr" alt="QR code for your authenticator app" width="180" height="180">
+          <p class="muted small">Or enter this key: <code id="totp-secret"></code></p>
+          <form id="totp-form" class="row">
+            <input id="totp-code" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code">
+            <button type="submit">Confirm</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="step card" data-step="3" hidden>
+      <h2>Sign this computer in</h2>
+      <p class="muted">This registers the computer itself on your tailnet as <code>tag:rmt-host</code>, separately from your own sign-in.</p>
+      <div id="login-body"></div>
+      <div id="tag-help" class="callout" hidden>
+        <strong>Your tailnet doesn't allow <code>tag:rmt-host</code> yet.</strong>
+        <p>In the Tailscale admin console, open <em>Access controls</em> and add:</p>
+        <pre id="tag-snippet"></pre>
+        <div class="row">
+          <button id="tag-copy" type="button"><svg><use href="#i-copy"/></svg> Copy</button>
+          <button id="tag-open" type="button">Open Access controls</button>
+          <button id="tag-retry" class="primary" type="button">Try again</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="step card" data-step="4" hidden>
+      <h2>Ready</h2>
+      <div id="finish-body"></div>
+      <div id="mac-perms" hidden>
+        <h3>macOS permissions</h3>
+        <p class="muted">Allow <strong>rmtd</strong> in both of these, then come back:</p>
+        <div class="row">
+          <button data-pane="screen" type="button">Screen Recording</button>
+          <button data-pane="accessibility" type="button">Accessibility</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wizard-nav">
+      <button id="wiz-cancel" type="button">Cancel</button>
+      <span class="spacer"></span>
+      <button id="wiz-back" type="button" hidden>Back</button>
+      <button id="wiz-next" class="primary" type="button">Next</button>
+    </div>
+  </main>
+</section>
+
+<div id="toasts" aria-live="polite"></div>
 </body>
 </html>
