@@ -229,6 +229,11 @@ func (x *Exchange) put(c net.Conn, req proto.FileReq) error {
 	if err := tmp.Sync(); err != nil {
 		return err
 	}
+	// Close before linking/removing: Windows can't delete (or rename) a file
+	// that is still open, which left the .part file behind after every upload.
+	if err := tmp.Close(); err != nil {
+		return err
+	}
 	final, err := commit(tmp.Name(), x.Dir, name)
 	if err != nil {
 		return err
