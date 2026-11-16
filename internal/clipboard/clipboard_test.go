@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+func init() { PollInterval = 20 * time.Millisecond }
+
 func waitFor(t *testing.T, what string, f func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -20,7 +22,6 @@ func waitFor(t *testing.T, what string, f func() bool) {
 }
 
 func TestSyncBothWaysNoLeakNoEcho(t *testing.T) {
-	PollInterval = 20 * time.Millisecond
 	hostCB := &Memory{text: "host secret before connect"}
 	viewCB := &Memory{text: "viewer secret before connect"}
 	a, b := net.Pipe()
@@ -52,7 +53,6 @@ func TestSyncBothWaysNoLeakNoEcho(t *testing.T) {
 }
 
 func TestOversizeIgnored(t *testing.T) {
-	PollInterval = 20 * time.Millisecond
 	hostCB, viewCB := &Memory{}, &Memory{}
 	a, b := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())

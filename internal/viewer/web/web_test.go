@@ -55,6 +55,9 @@ func (r *rec) Key(input.Key, bool) error          { r.inc(); return nil }
 func (r *rec) Close() error                       { return nil }
 func (r *rec) count() int                         { r.mu.Lock(); defer r.mu.Unlock(); return r.n }
 
+// Set once, before any Sync goroutine can read it.
+func init() { clipboard.PollInterval = 20 * time.Millisecond }
+
 type env struct {
 	url, addr        string
 	inj              *rec
@@ -71,7 +74,6 @@ func setup(t *testing.T) (string, string, *rec) {
 
 func setupEnv(t *testing.T) *env {
 	t.Helper()
-	clipboard.PollInterval = 20 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &env{inj: &rec{}, hostCB: &clipboard.Memory{}, viewerCB: &clipboard.Memory{}, hostDir: t.TempDir()}
 	inj := e.inj
@@ -233,7 +235,10 @@ func TestBridgeEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		if typ == websocket.MessageBinary {
-			if w, h := int(b[0])<<8|int(b[1]), int(b[2])<<8|int(b[3]); w != 100 || h != 50 {
+			if b[0] != 0 {
+				t.Fatalf("codec tag %d, want 0 (tiles)", b[0])
+			}
+			if w, h := int(b[1])<<8|int(b[2]), int(b[3])<<8|int(b[4]); w != 100 || h != 50 {
 				t.Fatalf("frame %dx%d", w, h)
 			}
 			break

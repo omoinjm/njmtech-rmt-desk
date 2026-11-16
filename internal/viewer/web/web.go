@@ -329,8 +329,13 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			switch t {
-			case proto.MsgVideoFrame:
-				if wc.Write(ctx, websocket.MessageBinary, b) != nil {
+			case proto.MsgVideoFrame, proto.MsgVideoH264:
+				// Binary websocket messages carry a 1-byte codec tag.
+				tag := byte(0)
+				if t == proto.MsgVideoH264 {
+					tag = 1
+				}
+				if wc.Write(ctx, websocket.MessageBinary, append([]byte{tag}, b...)) != nil {
 					return
 				}
 			case proto.MsgVideoInfo:

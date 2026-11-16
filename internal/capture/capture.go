@@ -43,3 +43,11 @@ func (Screen) Capture(display int) (*image.RGBA, error) {
 	}
 	return screenshot.CaptureDisplay(display)
 }
+
+// New returns the best capturer for this platform.
+func New() Capturer {
+	if c, err := newNative(); err == nil {
+		return c
+	}
+	return Screen{}
+}

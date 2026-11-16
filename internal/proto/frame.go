@@ -31,6 +31,7 @@ const (
 	MsgVideoInfo  MsgType = 11 // host -> viewer (video stream): VideoInfo
 	MsgVideoFrame MsgType = 12 // host -> viewer (video stream): binary tiles frame
 	MsgInput      MsgType = 13 // viewer -> host (input stream): input.Event JSON
+	MsgVideoH264  MsgType = 14 // host -> viewer (video stream): u8 flags (1=key) | u16 w | u16 h | Annex B
 
 	MsgClipboard MsgType = 30 // both ways (clipboard stream): Clipboard
 
@@ -156,15 +157,22 @@ type StreamOpen struct {
 // VideoReq starts or reconfigures the video stream. Sending it again on the
 // same stream switches display / quality and forces a keyframe.
 type VideoReq struct {
-	Display int `json:"display"`
-	FPS     int `json:"fps"`     // 1-30
-	Quality int `json:"quality"` // JPEG 10-95
+	Display int      `json:"display"`
+	FPS     int      `json:"fps"`     // 1-30
+	Quality int      `json:"quality"` // 10-95 (JPEG quality / H.264 bitrate tier)
+	Codecs  []string `json:"codecs"`  // viewer-supported, preferred first: "h264", "tiles"
 }
+
+const (
+	CodecTiles = "tiles"
+	CodecH264  = "h264"
+)
 
 // VideoInfo is sent by the host whenever the display set or selection changes.
 type VideoInfo struct {
 	Displays []DisplayInfo `json:"displays"`
 	Current  int           `json:"current"`
+	Codec    string        `json:"codec"`
 }
 
 type DisplayInfo struct {

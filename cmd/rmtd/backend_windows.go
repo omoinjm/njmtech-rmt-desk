@@ -14,7 +14,7 @@ import (
 
 func newBackend(dir string, serviceMode bool) (*backend, error) {
 	if !serviceMode {
-		return inProcessBackend(), nil
+		return inProcessBackend(codecDir(dir)), nil
 	}
 	// Session 0 can't see the desktop: delegate to a helper in the user's
 	// session, launched on demand and replaced when the console session changes.
@@ -24,7 +24,7 @@ func newBackend(dir string, serviceMode bool) (*backend, error) {
 	}
 	m := &helper.Manager{
 		Spawn: func() (helper.Proc, error) {
-			return helper.SpawnInSession(exe, []string{"helper"}, filepath.Join(dir, "helper.log"))
+			return helper.SpawnInSession(exe, []string{"helper", "--codecs", codecDir(dir)}, filepath.Join(dir, "helper.log"))
 		},
 		Session: helper.ActiveSession,
 		Logf:    log.Printf,

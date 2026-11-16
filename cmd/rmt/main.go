@@ -41,10 +41,17 @@ Environment:
   RMT_DIR     state dir (default: user config dir/rmt-desk/viewer)
 `
 
+// version is set at build time: -ldflags "-X main.version=v1.2.3"
+var version = "dev"
+
 func main() {
 	log.SetFlags(0)
 	if len(os.Args) < 2 {
 		os.Args = append(os.Args, "ui")
+	}
+	if os.Args[1] == "version" {
+		fmt.Println("rmt", version)
+		return
 	}
 	if a := os.Args[1]; a == "-h" || a == "--help" || a == "help" {
 		fmt.Fprint(os.Stderr, usage)

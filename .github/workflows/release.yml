@@ -1,0 +1,154 @@
+# Builds release binaries natively on each OS (macOS input/capture need cgo),
+# signs them where credentials are configured, and publishes a GitHub release
+# with SHA-256 checksums, a Sigstore (keyless) signature over the checksums
+# and SLSA build provenance.
+#
+# Optional repository secrets:
+#   WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD     Authenticode signing
+#   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD,
+#   MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_TEAM_ID,
+#   APPLE_APP_PASSWORD                                  codesign + notarization
+# Without them, the corresponding binaries are published unsigned (the
+# checksums are still Sigstore-signed and attested).
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest,  goos: linux,   goarch: amd64, cgo: "0" }
+          - { os: ubuntu-latest,  goos: linux,   goarch: arm64, cgo: "0" }
+          - { os: windows-latest, goos: windows, goarch: amd64, cgo: "0" }
+          - { os: windows-latest, goos: windows, goarch: arm64, cgo: "0" }
+          - { os: macos-latest,   goos: darwin,  goarch: arm64, cgo: "1" }
+          - { os: macos-latest,   goos: darwin,  goarch: amd64, cgo: "1", cc: "clang -arch x86_64" }
+    runs-on: ${{ matrix.os }}
+    env:
+      # A step's own env isn't visible in its `if:`, so expose flags here.
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+      HAS_MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        if: matrix.goarch == 'amd64' || matrix.goos == 'darwin'
+        shell: bash
+        run: go test ./...
+
+      - name: Build
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          CC: ${{ matrix.cc }}
+        run: |
+          mkdir -p dist/bin
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          for cmd in rmtd rmt; do
+            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/bin/${cmd}${ext}" "./cmd/${cmd}"
+          done
+
+      - name: Authenticode sign (Windows)
+        if: matrix.goos == 'windows' && env.HAS_WIN_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = "$env:RUNNER_TEMP\cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          foreach ($f in Get-ChildItem dist\bin\*.exe) {
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:WINDOWS_CERT_PASSWORD $f.FullName
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          Remove-Item $pfx
+
+      - name: Codesign + notarize (macOS)
+        if: matrix.goos == 'darwin' && env.HAS_MAC_CERT == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/build.keychain"; kcpw="$(uuidgen)"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 900 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc"
+          security list-keychains -d user -s "$kc"
+          for f in dist/bin/*; do
+            codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$f"
+          done
+          ditto -c -k dist/bin "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Package
+        shell: bash
+        run: |
+          name="rmt-desk_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          cp README.md dist/bin/
+          cd dist/bin
+          if [ "${{ matrix.goos }}" = windows ]; then
+            7z a -tzip "../${name}.zip" . > /dev/null
+          else
+            tar czf "../${name}.tar.gz" .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release
+      id-token: write      # Sigstore keyless signing + provenance
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS && cat SHA256SUMS
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums (keyless)
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*.tar.gz, dist/*.zip"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --generate-notes dist/*

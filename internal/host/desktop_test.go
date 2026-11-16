@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"net"
@@ -175,4 +176,85 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+type fakeH264 struct{ forced int }
+
+func (f *fakeH264) Encode(img *image.RGBA, fps, bitrate int, forceKey bool) ([]byte, bool, error) {
+	if forceKey {
+		f.forced++
+		return []byte{0, 0, 0, 1, 0x65}, true, nil
+	}
+	return []byte{0, 0, 0, 1, 0x41}, false, nil
+}
+func (f *fakeH264) Close() {}
+
+func videoSession(t *testing.T, newH264 func() (H264Encoder, error), codecs []string) (net.Conn, proto.VideoInfo, *fakeScreen) {
+	t.Helper()
+	scr := &fakeScreen{img: image.NewRGBA(image.Rect(0, 0, 101, 64))}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Desktop{Capturer: scr, NewH264: newH264, Logf: t.Logf}
+	s := &Server{Policy: authz.Policy{AllowedLogins: []string{"alice@example.com"}}, Gate: autoGate(),
+		Resolver: staticResolver{id: authz.Identity{Login: "alice@example.com"}}, Logf: t.Logf,
+		Handlers: map[string]StreamHandler{proto.StreamVideo: d.Video}}
+	done := make(chan struct{})
+	go func() { s.Serve(ctx, ln); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	sess, err := viewer.Connect(ctx, tcpDial, ln.Addr().String(), viewer.Auth{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	st, _ := sess.Open(proto.StreamVideo)
+	st.SetDeadline(time.Now().Add(5 * time.Second))
+	proto.WriteJSON(st, proto.MsgVideoReq, proto.VideoReq{FPS: 30, Codecs: codecs})
+	var info proto.VideoInfo
+	if err := proto.ReadJSON(st, proto.MsgVideoInfo, &info); err != nil {
+		t.Fatal(err)
+	}
+	return st, info, scr
+}
+
+func TestVideoH264Negotiated(t *testing.T) {
+	fe := &fakeH264{}
+	st, info, scr := videoSession(t, func() (H264Encoder, error) { return fe, nil }, []string{"h264", "tiles"})
+	if info.Codec != proto.CodecH264 {
+		t.Fatalf("codec %q", info.Codec)
+	}
+	typ, b, err := proto.ReadFrame(st)
+	if err != nil || typ != proto.MsgVideoH264 {
+		t.Fatalf("frame type %d err %v", typ, err)
+	}
+	if b[0] != 1 || int(b[1])<<8|int(b[2]) != 100 || int(b[3])<<8|int(b[4]) != 64 {
+		t.Fatalf("first frame header %v: want key, even-cropped 100x64", b[:5])
+	}
+	scr.mu.Lock()
+	scr.img.Pix[0] = 9 // change the screen -> delta frame
+	scr.mu.Unlock()
+	if typ, b, _ := proto.ReadFrame(st); typ != proto.MsgVideoH264 || b[0] != 0 {
+		t.Fatalf("second frame should be a delta, got type %d flags %d", typ, b[0])
+	}
+	// Re-sending a request forces a keyframe (viewer resync).
+	proto.WriteJSON(st, proto.MsgVideoReq, proto.VideoReq{FPS: 30, Codecs: []string{"h264"}})
+	for {
+		typ, b, err := proto.ReadFrame(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if typ == proto.MsgVideoH264 && b[0] == 1 {
+			break
+		}
+	}
+}
+
+func TestVideoFallsBackToTiles(t *testing.T) {
+	_, info, _ := videoSession(t, func() (H264Encoder, error) { return nil, errors.New("not installed") }, []string{"h264", "tiles"})
+	if info.Codec != proto.CodecTiles {
+		t.Fatalf("missing codec: got %q", info.Codec)
+	}
+	_, info, _ = videoSession(t, func() (H264Encoder, error) { return &fakeH264{}, nil }, []string{"tiles"})
+	if info.Codec != proto.CodecTiles {
+		t.Fatalf("viewer without h264: got %q", info.Codec)
+	}
 }

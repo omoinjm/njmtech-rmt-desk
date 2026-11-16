@@ -13,7 +13,8 @@ import (
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
 	"github.com/jezek/xgb/xtest"
-	"github.com/kbinani/screenshot"
+
+	"rmt-desk/internal/capture"
 )
 
 const (
@@ -49,10 +50,16 @@ func (x *x11) fake(typ, detail byte, rx, ry int16) error {
 }
 
 func (x *x11) MoveTo(display int, nx, ny float64) error {
-	if display < 0 || display >= screenshot.NumActiveDisplays() {
+	// Root-window coordinates, exactly what the capturer uses (kbinani's
+	// bounds are relative to the primary monitor, which XTEST would misplace).
+	bs, err := capture.RootBounds(x.c)
+	if err != nil {
+		return err
+	}
+	if display < 0 || display >= len(bs) {
 		return fmt.Errorf("input: no display %d", display)
 	}
-	b := screenshot.GetDisplayBounds(display)
+	b := bs[display]
 	px := b.Min.X + int(nx*float64(b.Dx()-1)+0.5)
 	py := b.Min.Y + int(ny*float64(b.Dy()-1)+0.5)
 	return x.fake(xMotionNotify, 0, int16(px), int16(py))

@@ -58,8 +58,26 @@ function send(type, data) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, data }));
 }
 
+// ---------- Codec negotiation ----------
+// Constrained Baseline, level 5.1 upper bound (OpenH264 output fits).
+const H264_CODEC = "avc1.42E033";
+let h264Supported = false;
+let currentCodec = "tiles";
+(async () => {
+  try {
+    if ("VideoDecoder" in window) {
+      const r = await VideoDecoder.isConfigSupported({ codec: H264_CODEC, optimizeForLatency: true });
+      h264Supported = !!r.supported;
+    }
+  } catch { h264Supported = false; }
+})();
+
+function codecs() {
+  return h264Supported && $("codec").value === "auto" ? ["h264", "tiles"] : ["tiles"];
+}
+
 function videoReq() {
-  send("video", { display, fps: +$("fps").value, quality: +$("quality").value });
+  send("video", { display, fps: +$("fps").value, quality: +$("quality").value, codecs: codecs() });
 }
 
 function connect(host) {
@@ -81,7 +99,13 @@ function connect(host) {
   };
   sock.onmessage = (ev) => {
     if (ws !== sock) return; // stale socket from a previous attempt
-    if (typeof ev.data !== "string") { enqueueFrame(ev.data); return; }
+    if (typeof ev.data !== "string") {
+      // 1-byte codec tag: 0 = JPEG tiles, 1 = H.264
+      const tag = new Uint8Array(ev.data, 0, 1)[0];
+      if (tag === 0) enqueueFrame(ev.data.slice(1));
+      else if (tag === 1) h264Frame(ev.data);
+      return;
+    }
     const m = JSON.parse(ev.data);
     switch (m.type) {
       case "hello":
@@ -105,6 +129,11 @@ function connect(host) {
         }
         display = m.data.current;
         sel.value = display;
+        if (m.data.codec !== currentCodec || m.data.codec === "h264") {
+          currentCodec = m.data.codec;
+          if (currentCodec === "h264") setupDecoder(); else closeDecoder();
+        }
+        $("codec").title = "Current: " + (currentCodec === "h264" ? "H.264" : "JPEG tiles");
         break;
       }
       case "status":
@@ -249,6 +278,8 @@ stage.addEventListener("drop", (e) => {
 });
 
 function disconnect() {
+  closeDecoder();
+  currentCodec = "tiles";
   sid = null;
   $("files").hidden = true;
   $("transfers").textContent = "";
@@ -266,6 +297,7 @@ $("disconnect").onclick = disconnect;
 $("display").onchange = (e) => { display = +e.target.value; videoReq(); };
 $("quality").onchange = videoReq;
 $("fps").onchange = videoReq;
+$("codec").onchange = videoReq;
 $("fit").onchange = (e) => $("stage").classList.toggle("fit", e.target.checked);
 $("stage").classList.add("fit");
 
@@ -305,6 +337,57 @@ async function drawFrame(buf) {
     ctx2d.drawImage(bmp, x, y);
     bmp.close();
   }
+}
+
+// ---------- Video: H.264 via WebCodecs ----------
+// Message: u8 tag | u8 flags (1 = key) | u16 w | u16 h | Annex B access unit
+let decoder = null, needKey = true, keyRequested = false, chunkTs = 0;
+
+function setupDecoder() {
+  closeDecoder();
+  decoder = new VideoDecoder({
+    output: (frame) => {
+      if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+        screenW = canvas.width = frame.displayWidth;
+        screenH = canvas.height = frame.displayHeight;
+      }
+      ctx2d.drawImage(frame, 0, 0);
+      frame.close();
+    },
+    error: (e) => {
+      console.warn("decoder error", e);
+      setupDecoder();
+      requestKey();
+    },
+  });
+  decoder.configure({ codec: H264_CODEC, optimizeForLatency: true });
+  needKey = true;
+}
+
+function closeDecoder() {
+  if (decoder && decoder.state !== "closed") decoder.close();
+  decoder = null;
+}
+
+function requestKey() {
+  if (keyRequested) return;
+  keyRequested = true;
+  needKey = true;
+  videoReq(); // any request makes the host send an IDR frame
+}
+
+function h264Frame(buf) {
+  if (!decoder || decoder.state !== "configured") return;
+  const key = new Uint8Array(buf, 1, 1)[0] === 1;
+  if (key) keyRequested = false;
+  if (needKey && !key) return; // can't decode deltas without a reference
+  if (decoder.decodeQueueSize > 4) { requestKey(); return; } // falling behind: resync
+  needKey = false;
+  decoder.decode(new EncodedVideoChunk({
+    type: key ? "key" : "delta",
+    timestamp: (chunkTs++) * 1000,
+    data: new Uint8Array(buf, 6),
+  }));
 }
 
 // ---------- Input ----------

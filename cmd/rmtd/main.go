@@ -23,6 +23,7 @@ import (
 	"rmt-desk/internal/access"
 	"rmt-desk/internal/audit"
 	"rmt-desk/internal/authz"
+	"rmt-desk/internal/codec/h264"
 	"rmt-desk/internal/config"
 	"rmt-desk/internal/helper"
 	"rmt-desk/internal/host"
@@ -43,6 +44,10 @@ Run:
   rmtd start|stop|restart      control the installed service
   rmtd uninstall               remove the service
 
+Video:
+  rmtd codec install           download Cisco's OpenH264 (H.264 video; much lower bandwidth)
+  rmtd codec status|remove
+
 Access:
   rmtd status                  show configuration
   rmtd allow  <login|tag:x>    allowlist a tailnet user login or ACL tag
@@ -60,6 +65,9 @@ Environment:
   TS_AUTHKEY   Tailscale auth key for the first login (tagged, pre-approved, single-use)
   RMTD_DIR     state/config dir (default: ` + "%s" + `)
 `
+
+// version is set at build time: -ldflags "-X main.version=v1.2.3"
+var version = "dev"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
@@ -79,7 +87,9 @@ func main() {
 	case "run":
 		err = cmdRun(dir, cfgPath)
 	case "helper":
-		err = cmdHelper()
+		err = cmdHelper(args)
+	case "codec":
+		err = cmdCodec(dir, args)
 	case "install", "uninstall", "start", "stop", "restart":
 		err = cmdService(dir, cmd)
 	case "status":
@@ -96,6 +106,8 @@ func main() {
 		err = cmdTOTP(dir, cfgPath, args)
 	case "mode":
 		err = cmdMode(dir, cfgPath, args)
+	case "version":
+		fmt.Println("rmtd", version)
 	case "-h", "--help", "help":
 		fmt.Fprintf(os.Stderr, usage, dir)
 	default:
@@ -223,10 +235,13 @@ type backend struct {
 
 // cmdHelper runs inside the interactive session, spawned by the service.
 // stdout is the IPC channel: nothing else may write to it.
-func cmdHelper() error {
+func cmdHelper(args []string) error {
+	fs := flag.NewFlagSet("helper", flag.ExitOnError)
+	codecs := fs.String("codecs", "", "codec library dir")
+	fs.Parse(args)
 	log.SetOutput(os.Stderr)
 	log.SetPrefix("rmtd-helper: ")
-	desk := inProcessDesktop()
+	desk := inProcessDesktop(*codecs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Printf("started (pid %d)", os.Getpid())
@@ -518,4 +533,56 @@ func cmdMode(dir, cfgPath string, args []string) error {
 		fmt.Printf("mode: %s (restart rmtd to apply)\n", m)
 		return nil
 	})
+}
+
+// codecDir holds the OpenH264 library. On Windows it sits outside the
+// admin-only state dir (the per-user helper must read it) with a DACL that
+// lets users read but only admins write; Load also re-verifies its hash.
+func codecDir(stateDir string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(filepath.Dir(stateDir), "codecs")
+	}
+	return filepath.Join(stateDir, "codecs")
+}
+
+func cmdCodec(dir string, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: rmtd codec install|status|remove")
+	}
+	cdir := codecDir(dir)
+	p, err := h264.LibPath(cdir)
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "install":
+		if err := os.MkdirAll(cdir, 0o755); err != nil {
+			return err
+		}
+		if err := tsnode.SecureSharedDir(cdir); err != nil {
+			return err
+		}
+		fmt.Println("Downloading OpenH264 from Cisco (ciscobinary.openh264.org)…")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		path, err := h264.Install(ctx, cdir)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("installed and verified: %s\n%s\nrestart rmtd to use it.\n", path, h264.Notice)
+	case "status":
+		if _, err := os.Stat(p); err != nil {
+			fmt.Println("H.264: not installed (video uses JPEG tiles). Run: rmtd codec install")
+			return nil
+		}
+		fmt.Printf("H.264: installed at %s\n%s\n", p, h264.Notice)
+	case "remove":
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Println("removed; video will use JPEG tiles after restart")
+	default:
+		return errors.New("usage: rmtd codec install|status|remove")
+	}
+	return nil
 }
