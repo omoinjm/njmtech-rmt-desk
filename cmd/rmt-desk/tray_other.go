@@ -7,3 +7,7 @@ package main
 func trayAvailable() bool { return false }
 func (a *App) startTray() {}
 func (a *App) stopTray()  {}
+
+const windowClass = ""
+
+func hideTaskbarButton() {}

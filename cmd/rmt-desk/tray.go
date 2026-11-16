@@ -109,4 +109,5 @@ func (a *App) onTrayReady() {
 func (a *App) showWindow() {
 	wruntime.WindowShow(a.ctx)
 	wruntime.WindowUnminimise(a.ctx)
+	hideTaskbarButton()
 }

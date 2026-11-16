@@ -61,13 +61,14 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 15, G: 17, B: 21, A: 255},
 		OnStartup:        app.startup,
+		OnDomReady:       app.domReady,
 		OnShutdown:       app.shutdown,
 		Bind:             []any{app},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true, // dropped files arrive as paths (sent to the host)
 			DisableWebViewDrop: true, // never let the web view navigate to a dropped file
 		},
-		Windows: &windows.Options{},
+		Windows: &windows.Options{WindowClassName: windowClass},
 		Mac: &mac.Options{
 			About: &mac.AboutInfo{Title: "rmt-desk", Message: "Remote desktop over your Tailscale tailnet.\n" + version},
 		},

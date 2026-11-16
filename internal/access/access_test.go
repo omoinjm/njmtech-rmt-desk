@@ -181,3 +181,23 @@ func TestConcurrentPromptRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A viewer that withdraws its request (to enter a password instead) must
+// not be locked out for it; real declines still count.
+func TestWithdrawnRequestNotCounted(t *testing.T) {
+	consent := func(ctx context.Context, _ string, _ time.Duration) (bool, error) {
+		<-ctx.Done()
+		return false, nil
+	}
+	g, _ := newGate(t, Config{}, consent)
+	for i := 0; i < freeAttempts+2; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		go cancel()
+		if _, err := g.Admit(ctx, alice, proto.Hello{}); code(err) != proto.CodeDenied {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	if _, locked := g.limiter.Locked(alice.NodeName+"|"+alice.Login, time.Now()); locked {
+		t.Fatal("withdrawn requests caused a lockout")
+	}
+}

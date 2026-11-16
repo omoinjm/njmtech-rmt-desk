@@ -16,3 +16,9 @@ func trayAvailable() bool {
 	err = conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, "org.kde.StatusNotifierWatcher").Store(&has)
 	return err == nil && has
 }
+
+// Linux: the window keeps its taskbar entry while open (hiding it needs
+// GTK access Wails doesn't expose); closing it still hides it to the tray.
+const windowClass = ""
+
+func hideTaskbarButton() {}

@@ -26,13 +26,14 @@ const held = new Set();
 function status(s) { $("status").textContent = s || ""; }
 function dot(state) { $("conn-dot").className = "dot " + (state || ""); }
 
-function overlay(msg, { spin = true, retry = false } = {}) {
+function overlay(msg, { spin = true, retry = false, password = false } = {}) {
   const o = $("overlay");
   if (msg == null) { o.hidden = true; return; }
   o.hidden = false;
   o.classList.toggle("idle", !spin);
   $("overlay-msg").textContent = msg;
   $("overlay-retry").hidden = !retry;
+  $("overlay-pw").hidden = !password;
 }
 
 function send(type, data) {
@@ -154,7 +155,11 @@ function onMessage(m) {
       break;
     }
     case "status":
-      overlay(`Connecting to ${currentHost}… If that computer asks for approval, someone there needs to click Allow.`);
+      // The host is admitting us. Without a password that means asking the
+      // person there; offer the password route instead (hosts set to
+      // "Either" accept a password straight away).
+      overlay(`Connecting to ${currentHost}… If that computer asks for approval, someone there needs to click Allow.`,
+        { password: true });
       break;
     case "clipboard":
       if (m.error) toast(m.error, "error");
@@ -197,6 +202,13 @@ $("auth").onsubmit = (e) => {
 $("auth-ask").onclick = () => { creds = { password: "", totp: "" }; connect(currentHost); };
 
 $("overlay-retry").onclick = () => { autoRetried = false; connect(currentHost); };
+$("overlay-pw").onclick = () => {
+  // Hang up (the host withdraws its approval prompt) and ask for the password.
+  quietClose = true;
+  if (ws) { const s = ws; ws = null; s.close(); }
+  overlay(null);
+  showAuth(`Enter the password for ${currentHost}.`);
+};
 $("overlay-cancel").onclick = () => leave();
 
 // ---------- leaving ----------

@@ -109,6 +109,16 @@ func (a *App) shutdown(context.Context) {
 func (a *App) onSecondInstance(options.SecondInstanceData) {
 	wruntime.WindowUnminimise(a.ctx)
 	wruntime.Show(a.ctx)
+	if a.tray {
+		hideTaskbarButton()
+	}
+}
+
+// domReady: the window is up; a tray app has no taskbar button.
+func (a *App) domReady(context.Context) {
+	if a.tray {
+		hideTaskbarButton()
+	}
 }
 
 // ---------- general ----------

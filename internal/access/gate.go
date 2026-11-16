@@ -125,6 +125,11 @@ func (g *Gate) Admit(ctx context.Context, id authz.Identity, h proto.Hello) ([]s
 		secs = 30
 	}
 	ok, err := g.Consent(ctx, id.String(), time.Duration(secs)*time.Second)
+	if ctx.Err() != nil {
+		// The viewer hung up while the prompt was showing (e.g. to use a
+		// password instead). Not a decline: don't count it towards lockout.
+		return nil, deny(proto.CodeDenied, "connection request withdrawn")
+	}
 	if err != nil {
 		return nil, deny(proto.CodeDenied, "could not ask the host user: "+err.Error())
 	}
