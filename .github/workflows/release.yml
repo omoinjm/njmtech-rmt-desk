@@ -10,7 +10,8 @@
 #   rmt-desk_<tag>_<os>_<arch>.tar.gz / .zip  command-line rmtd + rmt
 #
 # Optional repository secrets:
-#   WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD     Authenticode signing
+#   ES_USERNAME, ES_PASSWORD, ES_CREDENTIAL_ID,
+#   ES_TOTP_SECRET                                     Authenticode via SSL.com eSigner
 #   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD,
 #   MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_TEAM_ID,
 #   APPLE_APP_PASSWORD                                  codesign + notarization
@@ -27,6 +28,10 @@ permissions:
 env:
   WAILS_VERSION: v2.17.1
   NFPM_VERSION: v2.49.0
+  # SSL.com CodeSignTool (portable build; runs on the runner's Java).
+  # Not published with digests: pinned to the hash of the v1.3.2 asset.
+  CODESIGNTOOL_VERSION: v1.3.2
+  CODESIGNTOOL_SHA256: f14b1e1ef14bfa1fd00279c363aab0debbf5dcfba0e4bcdce5d22bb771de0e3a
 
 jobs:
   # ---------- command-line tools (rmtd, rmt) ----------
@@ -44,7 +49,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # A step's own env isn't visible in its `if:`, so expose flags here.
-      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+      HAS_ESIGNER: ${{ secrets.ES_USERNAME != '' }}
       HAS_MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -72,21 +77,32 @@ jobs:
               -o "dist/bin/${cmd}${ext}" "./cmd/${cmd}"
           done
 
+      - name: Set up eSigner (CodeSignTool, pinned)
+        if: matrix.goos == 'windows' && env.HAS_ESIGNER == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Fetch CodeSignTool
+        if: matrix.goos == 'windows' && env.HAS_ESIGNER == 'true'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'cst.zip'
+          Invoke-WebRequest -OutFile $zip -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/$env:CODESIGNTOOL_VERSION/CodeSignTool-$env:CODESIGNTOOL_VERSION.zip"
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:CODESIGNTOOL_SHA256) { throw "CodeSignTool hash mismatch: $h" }
+          $dir = Join-Path $env:RUNNER_TEMP 'codesigntool'
+          Expand-Archive $zip -DestinationPath $dir
+          "CODESIGNTOOL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Authenticode sign (Windows)
-        if: matrix.goos == 'windows' && env.HAS_WIN_CERT == 'true'
+        if: matrix.goos == 'windows' && env.HAS_ESIGNER == 'true'
         shell: pwsh
         env:
-          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        run: |
-          $pfx = "$env:RUNNER_TEMP\cert.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-          foreach ($f in Get-ChildItem dist\bin\*.exe) {
-            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:WINDOWS_CERT_PASSWORD $f.FullName
-            if ($LASTEXITCODE -ne 0) { exit 1 }
-          }
-          Remove-Item $pfx
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+        run: ./packaging/windows/sign.ps1 (Get-ChildItem dist/bin/*.exe).FullName
 
       - name: Codesign + notarize (macOS)
         if: matrix.goos == 'darwin' && env.HAS_MAC_CERT == 'true'
@@ -141,7 +157,7 @@ jobs:
         arch: [amd64, arm64]
     runs-on: windows-latest
     env:
-      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+      HAS_ESIGNER: ${{ secrets.ES_USERNAME != '' }}
     defaults:
       run:
         shell: bash
@@ -166,30 +182,43 @@ jobs:
             -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o build/bin/rmtd.exe ../rmtd
           wails build -platform windows/${{ matrix.arch }} -nsis -skipbindings -trimpath \
             -ldflags "-X main.version=${GITHUB_REF_NAME}"
-      - name: Authenticode sign (app, rmtd, then rebuilt installer)
-        if: env.HAS_WIN_CERT == 'true'
+      - name: Set up eSigner (CodeSignTool, pinned)
+        if: env.HAS_ESIGNER == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Fetch CodeSignTool
+        if: env.HAS_ESIGNER == 'true'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'cst.zip'
+          Invoke-WebRequest -OutFile $zip -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/$env:CODESIGNTOOL_VERSION/CodeSignTool-$env:CODESIGNTOOL_VERSION.zip"
+          $h = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:CODESIGNTOOL_SHA256) { throw "CodeSignTool hash mismatch: $h" }
+          $dir = Join-Path $env:RUNNER_TEMP 'codesigntool'
+          Expand-Archive $zip -DestinationPath $dir
+          "CODESIGNTOOL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign app + rmtd, rebuild installer (signs installer + uninstaller)
+        if: env.HAS_ESIGNER == 'true'
         shell: pwsh
         working-directory: cmd/rmt-desk
         env:
-          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
         run: |
-          $pfx = "$env:RUNNER_TEMP\cert.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
-          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
-          function Sign($f) {
-            & $signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $pfx /p $env:WINDOWS_CERT_PASSWORD $f
-            if ($LASTEXITCODE -ne 0) { exit 1 }
-          }
-          Sign "build\bin\rmt-desk.exe"
-          Sign "build\bin\rmtd.exe"
-          # Re-pack the installer around the signed executables.
+          $sign = (Resolve-Path ..\..\packaging\windows\sign.ps1).Path
+          & $sign build\bin\rmt-desk.exe build\bin\rmtd.exe
+          # Re-pack around the signed executables; makensis calls sign.ps1
+          # for the uninstaller it embeds and for the finished installer.
           $arch = "${{ matrix.arch }}".ToUpper()
           $bin = (Resolve-Path "build\bin\rmt-desk.exe").Path
-          & makensis "-DARG_WAILS_${arch}_BINARY=$bin" build\windows\installer\project.nsi
+          & makensis "-DARG_WAILS_${arch}_BINARY=$bin" "-DSIGN_SCRIPT=$sign" build\windows\installer\project.nsi
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          Sign "build\bin\rmt-desk-${{ matrix.arch }}-setup.exe"
-          Remove-Item $pfx
+          $inst = Get-AuthenticodeSignature "build\bin\rmt-desk-${{ matrix.arch }}-setup.exe"
+          if ($inst.Status -ne 'Valid') { throw "installer not signed: $($inst.Status)" }
       - name: Collect
         run: |
           mkdir -p dist

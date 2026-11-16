@@ -15,6 +15,15 @@ Unicode true
 !endif
 
 !include "wails_tools.nsh"
+
+# Release builds pass -DSIGN_SCRIPT=<path to packaging\windows\sign.ps1>:
+# the installer and the uninstaller it embeds are then Authenticode-signed
+# as they are produced (an unsigned uninstaller would be blocked by Smart
+# App Control).
+!ifdef SIGN_SCRIPT
+  !finalize 'powershell -NoProfile -ExecutionPolicy Bypass -File "${SIGN_SCRIPT}" "%1"' = 0
+  !uninstfinalize 'powershell -NoProfile -ExecutionPolicy Bypass -File "${SIGN_SCRIPT}" "%1"' = 0
+!endif
 !include "LogicLib.nsh"
 !include "StrFunc.nsh"
 ${StrStr}
@@ -115,7 +124,9 @@ Section "uninstall"
   # reinstall pick up where it left off; removing them signs this computer
   # out (also remove it from the Tailscale admin console).
   MessageBox MB_YESNO|MB_ICONQUESTION "Also remove this computer's rmt-desk sign-in, settings and audit log?" /SD IDNO IDNO keep
-    RMDir /r "$COMMONAPPDATA\rmt-desk"
+    SetShellVarContext all          # $APPDATA = %ProgramData%
+    RMDir /r "$APPDATA\rmt-desk"
+    !insertmacro wails.setShellContext
   keep:
 
   RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # WebView2 data

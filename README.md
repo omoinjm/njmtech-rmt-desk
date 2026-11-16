@@ -153,8 +153,10 @@ the session drops. Only one viewer may control input at a time.
 ## Releases
 Push a `v*` tag: `.github/workflows/release.yml` builds natively on Linux/Windows/macOS
 (amd64 + arm64): the app installers (Windows setup `.exe`, macOS universal `.dmg`, Linux
-`.deb`/`.rpm`/`.AppImage`) and the command-line archives. It Authenticode-signs (Windows)
-and codesigns + notarizes (macOS) when the secrets listed in the workflow are configured
+`.deb`/`.rpm`/`.AppImage`) and the command-line archives. It Authenticode-signs Windows
+files with **SSL.com eSigner** (the executables, the installer and its uninstaller, which
+Smart App Control requires) and codesigns + notarizes macOS builds, when the secrets
+listed at the top of the workflow are configured
 (otherwise macOS builds are ad-hoc signed: right-click → Open the first time), and
 publishes everything with
 `SHA256SUMS`, a Sigstore keyless signature (`SHA256SUMS.sigstore.json`) and SLSA build
