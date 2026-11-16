@@ -41,6 +41,16 @@ func Connect(ctx context.Context, dial Dialer, addr string, auth Auth) (*Session
 	if err := proto.WriteJSON(c, proto.MsgHello, proto.Hello{
 		Version: proto.Version, Client: ClientName, Password: auth.Password, TOTP: auth.TOTP,
 	}); err != nil {
+		// The host may have refused us before reading the Hello: its reason
+		// is usually already waiting to be read.
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var ack proto.HelloAck
+		if rerr := proto.ReadJSON(c, proto.MsgHelloAck, &ack); rerr != nil {
+			if _, ok := rerr.(*proto.RemoteError); ok {
+				c.Close()
+				return nil, rerr
+			}
+		}
 		c.Close()
 		return nil, err
 	}

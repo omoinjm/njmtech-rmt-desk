@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -132,7 +133,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	if err != nil {
 		s.logf("deny %s: %v", remote, err)
 		s.Audit.Write(audit.Event{Kind: "deny", Peer: id.String(), Remote: remote, Detail: err.Error()})
-		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeDenied, Message: "access denied"})
+		refuse(c, proto.Error{Code: proto.CodeDenied, Message: "access denied"})
 		return
 	}
 
@@ -144,14 +145,14 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		return
 	}
 	if hello.Version != proto.Version {
-		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeVersion,
+		refuse(c, proto.Error{Code: proto.CodeVersion,
 			Message: fmt.Sprintf("protocol version mismatch: host=%d viewer=%d", proto.Version, hello.Version)})
 		return
 	}
 
 	// 3. Session admission: password/TOTP or consent prompt.
 	if s.Gate == nil {
-		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeDenied, Message: "host has no access gate"})
+		refuse(c, proto.Error{Code: proto.CodeDenied, Message: "host has no access gate"})
 		return
 	}
 	actx2, cancel2 := context.WithCancel(ctx)
@@ -164,7 +165,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		e := access.AsError(err)
 		s.logf("refused %s: %s", id, e.Message)
 		s.Audit.Write(audit.Event{Kind: "refuse", Peer: id.String(), Remote: remote, Detail: e.Code + ": " + e.Message})
-		_ = proto.WriteJSON(c, proto.MsgError, e)
+		refuse(c, e)
 		return
 	}
 	host := s.HostName
@@ -224,6 +225,23 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		hwg.Add(1)
 		go func() { defer hwg.Done(); h(sctx, id, st) }()
 	}
+}
+
+// refuse sends the reason a connection is refused and closes gracefully:
+// it half-closes and drains what the viewer already sent (e.g. its Hello)
+// first. Closing with unread data makes TCP send a reset, which can make the
+// viewer see "broken pipe"/"connection reset" instead of the reason, or even
+// discard the reason before it's read.
+func refuse(c net.Conn, e proto.Error) {
+	_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if proto.WriteJSON(c, proto.MsgError, e) != nil {
+		return
+	}
+	if hc, ok := c.(interface{ CloseWrite() error }); ok {
+		_ = hc.CloseWrite()
+	}
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = io.Copy(io.Discard, io.LimitReader(c, 64<<10))
 }
 
 // streamPermission maps each stream kind to the permission it needs.
