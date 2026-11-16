@@ -23,8 +23,8 @@ import (
 	"rmt-desk/internal/tsnode"
 	"rmt-desk/internal/viewer/web"
 
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/wailsapp/wails/v2/pkg/options"
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"rsc.io/qr"
 )
 
@@ -36,6 +36,7 @@ var embedOrigins = []string{"http://wails.localhost", "wails://wails"}
 type App struct {
 	ctx       context.Context
 	setupMode bool
+	tray      bool // icon in the system tray; the window hides on close
 	prefill   string
 	hostDir   string
 
@@ -57,6 +58,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	if a.setupMode {
 		return
+	}
+	if a.tray {
+		a.startTray()
 	}
 	hn, _ := os.Hostname()
 	node, err := tsnode.Open(tsnode.Options{
@@ -86,6 +90,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(context.Context) {
+	if a.tray {
+		a.stopTray()
+	}
 	a.loginMu.Lock()
 	if a.loginCancel != nil {
 		a.loginCancel()

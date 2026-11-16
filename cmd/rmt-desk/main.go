@@ -82,6 +82,12 @@ func main() {
 			opts.Windows.WebviewUserDataPath = filepath.Join(d, "rmt-desk", "webview-setup")
 		}
 	} else {
+		if trayAvailable() {
+			// Live in the tray: closing the window hides it (and its taskbar
+			// button); the tray icon brings it back, "Quit" exits.
+			opts.HideWindowOnClose = true
+			app.tray = true
+		}
 		opts.SingleInstanceLock = &options.SingleInstanceLock{
 			UniqueId:               "rmt-desk.main.4f0c2a",
 			OnSecondInstanceLaunch: app.onSecondInstance,
