@@ -35,3 +35,25 @@ func SecureSharedDir(dir string) error {
 	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
+
+// SecureUserDir restricts dir to SYSTEM and the user running this process.
+// Used for per-user state such as the viewer's node key, where the
+// admin-only DACL of SecureDir would lock a non-elevated user out of their
+// own directory.
+func SecureUserDir(dir string) error {
+	tu, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	sd, err := windows.SecurityDescriptorFromString(
+		"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;" + tu.User.Sid.String() + ")")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}

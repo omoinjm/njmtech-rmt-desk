@@ -69,6 +69,7 @@ func main() {
 		Hostname: "rmt-viewer-" + hn,
 		StateDir: dir,
 		AuthKey:  os.Getenv("TS_AUTHKEY"),
+		PerUser:  true,
 	})
 	if err != nil {
 		log.Fatal(err)

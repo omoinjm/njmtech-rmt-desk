@@ -21,6 +21,10 @@ type Options struct {
 	AuthKey  string   // only needed on first login; read from env, never embedded
 	Tags     []string // advertised ACL tags, e.g. tag:rmt-host
 	Verbose  bool
+	// PerUser locks StateDir to the current user instead of to
+	// SYSTEM+Administrators (Windows); used by the viewer, which runs
+	// unelevated.
+	PerUser bool
 }
 
 type Node struct {
@@ -34,7 +38,11 @@ func Start(ctx context.Context, o Options) (*Node, error) {
 		return nil, err
 	}
 	// Tighten perms even if the dir pre-existed.
-	if err := SecureDir(o.StateDir); err != nil {
+	secure := SecureDir
+	if o.PerUser {
+		secure = SecureUserDir
+	}
+	if err := secure(o.StateDir); err != nil {
 		return nil, err
 	}
 	srv := &tsnet.Server{
