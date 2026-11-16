@@ -10,16 +10,22 @@ import (
 
 	"rmt-desk/internal/authz"
 	"rmt-desk/internal/capture"
+	"rmt-desk/internal/clipboard"
 	"rmt-desk/internal/codec/tiles"
+	"rmt-desk/internal/files"
 	"rmt-desk/internal/input"
 	"rmt-desk/internal/proto"
 )
 
-// Desktop serves the video and input streams.
+// Desktop serves the video, input, clipboard and files streams. It runs
+// wherever the user's desktop is reachable (in-process, or the Windows
+// session helper).
 type Desktop struct {
-	Capturer    capture.Capturer
-	NewInjector func() (input.Injector, error)
-	Logf        func(string, ...any)
+	Capturer     capture.Capturer
+	NewInjector  func() (input.Injector, error)
+	NewClipboard func() (clipboard.Clipboard, error)
+	Files        *files.Exchange
+	Logf         func(string, ...any)
 
 	// Only one session may drive input at a time.
 	inputMu sync.Mutex
@@ -175,4 +181,31 @@ func (d *Desktop) Input(ctx context.Context, id authz.Identity, c net.Conn) {
 			d.logf("input: %v", err)
 		}
 	}
+}
+
+// Clipboard syncs the host clipboard with the viewer's for the session.
+func (d *Desktop) Clipboard(ctx context.Context, id authz.Identity, c net.Conn) {
+	defer c.Close()
+	if d.NewClipboard == nil {
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Message: "clipboard not available on host"})
+		return
+	}
+	cb, err := d.NewClipboard()
+	if err != nil {
+		d.logf("clipboard unavailable: %v", err)
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Message: err.Error()})
+		return
+	}
+	d.logf("clipboard sync start: %s", id.NodeName)
+	_ = clipboard.Sync(ctx, cb, c, d.logf)
+}
+
+// FileStream serves one file operation against the exchange folder.
+func (d *Desktop) FileStream(ctx context.Context, id authz.Identity, c net.Conn) {
+	if d.Files == nil {
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Message: "file transfer not available on host"})
+		c.Close()
+		return
+	}
+	d.Files.Serve(ctx, c)
 }

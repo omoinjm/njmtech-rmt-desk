@@ -164,6 +164,9 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			st.Close()
 			continue
 		}
+		if kind != proto.StreamControl {
+			s.Audit.Write(audit.Event{Kind: "stream", Peer: id.String(), Remote: remote, Detail: kind})
+		}
 		hwg.Add(1)
 		go func() { defer hwg.Done(); h(sctx, id, st) }()
 	}

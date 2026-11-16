@@ -46,6 +46,8 @@ let screenW = 0, screenH = 0, display = 0;
 let viewOnly = false;
 let currentHost = null;
 let creds = { password: "", totp: "" }; // kept in memory only, per host
+let sid = null;      // bridge session id, for file endpoints
+let granted = [];
 const canvas = $("screen");
 const ctx2d = canvas.getContext("2d");
 const held = new Set(); // key codes held in the browser
@@ -83,6 +85,11 @@ function connect(host) {
     const m = JSON.parse(ev.data);
     switch (m.type) {
       case "hello":
+        sid = m.data.sid;
+        granted = m.data.granted || [];
+        $("files-btn").hidden = !granted.includes("files");
+        $("clip").parentElement.hidden = !granted.includes("clipboard");
+        if (!$("clip").checked) send("clipboard", { enabled: false });
         status(`connected · ${m.data.os} · ${m.data.identity}`);
         videoReq();
         canvas.focus();
@@ -102,6 +109,9 @@ function connect(host) {
       }
       case "status":
         status(m.error);
+        break;
+      case "clipboard":
+        if (m.error) status(m.error);
         break;
       case "view-only":
         viewOnly = true;
@@ -138,7 +148,110 @@ $("auth-ask").onclick = () => {
   connect(currentHost);
 };
 
+// ---------- Clipboard ----------
+$("clip").onchange = (e) => send("clipboard", { enabled: e.target.checked });
+
+// ---------- Files ----------
+function fmtSize(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+async function loadFiles() {
+  const ul = $("file-list");
+  if (!sid) return;
+  ul.textContent = "Loading…";
+  try {
+    const res = await fetch(`/api/files?sid=${sid}`);
+    if (!res.ok) throw new Error(await res.text());
+    const l = await res.json();
+    $("files-dir").textContent = l.dir;
+    ul.textContent = "";
+    if (!l.files.length) { ul.textContent = "Empty. Files you send appear here."; return; }
+    for (const f of l.files) {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = `/api/download?sid=${sid}&name=${encodeURIComponent(f.name)}`;
+      a.download = f.name;
+      a.textContent = f.name;
+      a.title = "Download to this computer";
+      const size = document.createElement("span");
+      size.className = "size";
+      size.textContent = fmtSize(f.size);
+      li.append(a, size);
+      ul.append(li);
+    }
+  } catch (e) {
+    ul.textContent = "Error: " + e.message;
+  }
+}
+
+function uploadFile(file) {
+  const li = document.createElement("li");
+  const name = document.createElement("span");
+  name.textContent = file.name;
+  const state = document.createElement("span");
+  state.className = "state";
+  state.textContent = fmtSize(file.size);
+  const bar = document.createElement("progress");
+  bar.max = file.size || 1;
+  bar.value = 0;
+  li.append(name, state, bar);
+  $("transfers").prepend(li);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/upload?sid=${sid}&name=${encodeURIComponent(file.name)}`);
+  xhr.setRequestHeader("X-Rmt-Upload", "1");
+  xhr.upload.onprogress = (e) => { bar.value = e.loaded; };
+  xhr.onload = () => {
+    bar.remove();
+    if (xhr.status === 200) {
+      const d = JSON.parse(xhr.responseText);
+      state.textContent = "sent ✓ verified";
+      name.textContent = d.name;
+      loadFiles();
+    } else {
+      const err = document.createElement("span");
+      err.className = "err";
+      err.textContent = xhr.responseText.trim() || `failed (${xhr.status})`;
+      state.textContent = "failed";
+      li.append(err);
+    }
+  };
+  xhr.onerror = () => { bar.remove(); state.textContent = "failed (connection)"; };
+  xhr.send(file);
+}
+
+$("files-btn").onclick = () => {
+  const p = $("files");
+  p.hidden = !p.hidden;
+  if (!p.hidden) loadFiles();
+};
+$("files-refresh").onclick = loadFiles;
+$("upload").onchange = (e) => { for (const f of e.target.files) uploadFile(f); e.target.value = ""; };
+
+// Drag & drop onto the remote screen.
+const stage = $("stage");
+let dragDepth = 0;
+stage.addEventListener("dragenter", (e) => {
+  if (!sid || !granted.includes("files") || !e.dataTransfer.types.includes("Files")) return;
+  e.preventDefault(); dragDepth++; $("drop").hidden = false;
+});
+stage.addEventListener("dragover", (e) => { if (!$("drop").hidden) e.preventDefault(); });
+stage.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("drop").hidden = true; } });
+stage.addEventListener("drop", (e) => {
+  if ($("drop").hidden) return;
+  e.preventDefault(); dragDepth = 0; $("drop").hidden = true;
+  $("files").hidden = false;
+  for (const f of e.dataTransfer.files) uploadFile(f);
+});
+
 function disconnect() {
+  sid = null;
+  $("files").hidden = true;
+  $("transfers").textContent = "";
   creds = { password: "", totp: "" };
   $("auth").hidden = true;
   releaseAll();

@@ -230,11 +230,11 @@ func cmdHelper() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Printf("started (pid %d)", os.Getpid())
-	return helper.Serve(ctx, helper.StdioConn{R: os.Stdin, W: os.Stdout}, map[string]helper.Handler{
-		proto.StreamVideo:   func(ctx context.Context, c net.Conn) { desk.Video(ctx, authz.Identity{}, c) },
-		proto.StreamInput:   func(ctx context.Context, c net.Conn) { desk.Input(ctx, authz.Identity{}, c) },
-		proto.StreamConsent: helper.ConsentHandler(prompt.Ask),
-	})
+	handlers := map[string]helper.Handler{proto.StreamConsent: helper.ConsentHandler(prompt.Ask)}
+	for kind, h := range desktopHandlers(desk) {
+		handlers[kind] = func(ctx context.Context, c net.Conn) { h(ctx, authz.Identity{}, c) }
+	}
+	return helper.Serve(ctx, helper.StdioConn{R: os.Stdin, W: os.Stdout}, handlers)
 }
 
 // ---------- service ----------

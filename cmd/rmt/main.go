@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"rmt-desk/internal/clipboard"
 	"rmt-desk/internal/config"
 	"rmt-desk/internal/proto"
 	"rmt-desk/internal/tsnode"
@@ -151,8 +152,9 @@ func cmdPing(ctx context.Context, n *tsnode.Node, host string, auth viewer.Auth)
 
 func cmdUI(ctx context.Context, n *tsnode.Node) error {
 	ws := &web.Server{
-		Dial:      n.Srv.Dial,
-		ListHosts: func(ctx context.Context) ([]tsnode.Peer, error) { return n.Hosts(ctx, config.HostTag) },
+		Dial:         n.Srv.Dial,
+		ListHosts:    func(ctx context.Context) ([]tsnode.Peer, error) { return n.Hosts(ctx, config.HostTag) },
+		NewClipboard: clipboard.New,
 	}
 	ln, url, err := ws.Listen()
 	if err != nil {

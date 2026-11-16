@@ -15,8 +15,8 @@ your Tailscale tailnet. No public ports, no third-party relay. Windows / Linux /
 | 1 | tsnet node, WhoIs allowlist, handshake, yamux streams, `rmt list/ping` | **done** |
 | 2 | Screen capture + dirty-tile JPEG video + mouse/keyboard, browser viewer | **done** (needs on-device testing) |
 | 3 | Service install, Windows session helper, password (argon2id) + TOTP, consent prompt, lockout, permissions | **done** (needs on-device testing) |
-| 4 | Clipboard + file transfer | next |
-| 5 | H.264/WebCodecs, multi-monitor, Wayland, signed releases | |
+| 4 | Clipboard sync + file transfer (sandboxed exchange folder, SHA-256 verified) | **done** (needs on-device testing) |
+| 5 | H.264/WebCodecs, faster capture, Wayland, signed releases | next |
 
 ## Security model
 1. **Network:** listens only on the tailnet via tsnet. Restrict with a Tailscale grant (below).
@@ -31,7 +31,8 @@ your Tailscale tailnet. No public ports, no third-party relay. Windows / Linux /
      TOTP codes can't be replayed. Only one consent dialog at a time.
 4. **Permissions:** `view`, `input`, `clipboard`, `files` granted per session (config
    `access.permissions`), enforced by the host on every stream. One controller at a time.
-5. **Audit:** connects, refusals and disconnects are appended to `audit.log` (0600).
+5. **Audit:** connects, refusals, every stream opened (video/input/clipboard/files) and
+   disconnects are appended to `audit.log` (0600).
 6. **State protection:** the state dir (node key, config, logs) is 0700 / on Windows a
    protected DACL limited to SYSTEM + Administrators.
 
@@ -86,6 +87,18 @@ Known limitations (by design for now, least privilege):
 - **Windows:** no access at the logon/lock screen or to UAC prompts/elevated windows (UIPI).
 - **macOS/Linux:** a user must be logged in to the desktop; macOS needs Screen Recording +
   Accessibility granted to `rmtd`; Linux needs X11/XWayland (no native Wayland yet).
+
+## Clipboard & files
+- **Clipboard** (text, ≤ 1 MiB): synced both ways between the viewer computer's clipboard and
+  the host's while the session is open (toggle in the toolbar). Only changes made *after*
+  connecting are sent, so connecting never leaks what was already copied on either side.
+- **Files**: one exchange folder on the host, `~/Downloads/rmt-desk`. From the viewer you can
+  send files into it (button or drag-and-drop onto the screen) and download files from it,
+  and nothing else: no paths, subfolders or symlinks; names are sanitized; uploads never
+  overwrite (`name (1).ext`); every transfer is SHA-256 verified end to end and a failed
+  upload leaves nothing behind. Default per-file limit 4 GiB.
+- Backends: Windows Win32 clipboard; Linux X11 `CLIPBOARD` selection (pure Go, works on
+  XWayland/WSLg); macOS `pbcopy`/`pbpaste`.
 
 Keys are sent as physical key positions (`KeyboardEvent.code`), so the *host's*
 keyboard layout decides the character. Held keys/buttons are released automatically if

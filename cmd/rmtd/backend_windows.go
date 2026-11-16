@@ -31,8 +31,10 @@ func newBackend(dir string, serviceMode bool) (*backend, error) {
 	}
 	return &backend{
 		Handlers: map[string]host.StreamHandler{
-			proto.StreamVideo: m.Proxy(proto.StreamVideo),
-			proto.StreamInput: m.Proxy(proto.StreamInput),
+			proto.StreamVideo:     m.Proxy(proto.StreamVideo),
+			proto.StreamInput:     m.Proxy(proto.StreamInput),
+			proto.StreamClipboard: m.Proxy(proto.StreamClipboard),
+			proto.StreamFiles:     m.Proxy(proto.StreamFiles),
 		},
 		Consent: m.Consent,
 		Close:   m.Close,

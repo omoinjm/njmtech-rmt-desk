@@ -32,6 +32,15 @@ const (
 	MsgVideoFrame MsgType = 12 // host -> viewer (video stream): binary tiles frame
 	MsgInput      MsgType = 13 // viewer -> host (input stream): input.Event JSON
 
+	MsgClipboard MsgType = 30 // both ways (clipboard stream): Clipboard
+
+	MsgFileReq  MsgType = 40 // viewer -> host: FileReq (first frame of a files stream)
+	MsgFileAck  MsgType = 41 // host -> viewer: FileAck
+	MsgFileData MsgType = 42 // either: raw chunk
+	MsgFileEnd  MsgType = 43 // sender -> receiver: FileEnd (after the last chunk)
+	MsgFileDone MsgType = 44 // host -> viewer: FileDone (upload committed)
+	MsgFileList MsgType = 45 // host -> viewer: FileList
+
 	// Internal: service <-> session helper (never sent over the tailnet).
 	MsgConsentReq  MsgType = 20 // ConsentReq
 	MsgConsentResp MsgType = 21 // ConsentResp
@@ -177,4 +186,44 @@ type ConsentReq struct {
 type ConsentResp struct {
 	Allow bool   `json:"allow"`
 	Error string `json:"error,omitempty"`
+}
+
+// MaxClipboard bounds clipboard text in either direction.
+const MaxClipboard = 1 << 20
+
+type Clipboard struct {
+	Text string `json:"text"`
+}
+
+// File transfer: one operation per files stream.
+type FileReq struct {
+	Op   string `json:"op"` // "put", "get", "list"
+	Name string `json:"name,omitempty"`
+	Size int64  `json:"size,omitempty"` // put only
+}
+
+type FileAck struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+type FileEnd struct {
+	SHA256 string `json:"sha256"` // hex
+}
+
+type FileDone struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type FileInfo struct {
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mtime"` // unix seconds
+}
+
+type FileList struct {
+	Dir   string     `json:"dir"` // display only
+	Files []FileInfo `json:"files"`
 }

@@ -1,12 +1,17 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"image"
+	"io"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +19,8 @@ import (
 
 	"rmt-desk/internal/authz"
 	"rmt-desk/internal/capture"
+	"rmt-desk/internal/clipboard"
+	"rmt-desk/internal/files"
 	"rmt-desk/internal/host"
 	"rmt-desk/internal/input"
 	"rmt-desk/internal/proto"
@@ -48,19 +55,40 @@ func (r *rec) Key(input.Key, bool) error          { r.inc(); return nil }
 func (r *rec) Close() error                       { return nil }
 func (r *rec) count() int                         { r.mu.Lock(); defer r.mu.Unlock(); return r.n }
 
+type env struct {
+	url, addr        string
+	inj              *rec
+	hostCB, viewerCB *clipboard.Memory
+	hostDir          string
+}
+
 // setup starts a fake host (plain TCP) and the web bridge; returns the
 // one-time URL, the bridge address, and the injector recorder.
 func setup(t *testing.T) (string, string, *rec) {
+	e := setupEnv(t)
+	return e.url, e.addr, e.inj
+}
+
+func setupEnv(t *testing.T) *env {
 	t.Helper()
+	clipboard.PollInterval = 20 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
-	inj := &rec{}
+	e := &env{inj: &rec{}, hostCB: &clipboard.Memory{}, viewerCB: &clipboard.Memory{}, hostDir: t.TempDir()}
+	inj := e.inj
 
 	hl, _ := net.Listen("tcp", "127.0.0.1:0")
-	desk := &host.Desktop{Capturer: screen{}, NewInjector: func() (input.Injector, error) { return inj, nil }, Logf: t.Logf}
+	desk := &host.Desktop{
+		Capturer: screen{}, NewInjector: func() (input.Injector, error) { return inj, nil }, Logf: t.Logf,
+		NewClipboard: func() (clipboard.Clipboard, error) { return e.hostCB, nil },
+		Files:        &files.Exchange{Dir: e.hostDir},
+	}
 	hs := &host.Server{
 		Policy: authz.Policy{AllowedLogins: []string{"alice@example.com"}},
 		Gate:   autoGate(), Resolver: allowAll{}, Logf: t.Logf,
-		Handlers: map[string]host.StreamHandler{proto.StreamVideo: desk.Video, proto.StreamInput: desk.Input},
+		Handlers: map[string]host.StreamHandler{
+			proto.StreamVideo: desk.Video, proto.StreamInput: desk.Input,
+			proto.StreamClipboard: desk.Clipboard, proto.StreamFiles: desk.FileStream,
+		},
 	}
 	hdone := make(chan struct{})
 	go func() { hs.Serve(ctx, hl); close(hdone) }()
@@ -74,7 +102,8 @@ func setup(t *testing.T) (string, string, *rec) {
 		ListHosts: func(context.Context) ([]tsnode.Peer, error) {
 			return []tsnode.Peer{{HostName: "rmt-box", Online: true}}, nil
 		},
-		Logf: t.Logf,
+		NewClipboard: func() (clipboard.Clipboard, error) { return e.viewerCB, nil },
+		Logf:         t.Logf,
 	}
 	ln, url, err := ws.Listen()
 	if err != nil {
@@ -83,7 +112,8 @@ func setup(t *testing.T) (string, string, *rec) {
 	wdone := make(chan struct{})
 	go func() { ws.Serve(ctx, ln); close(wdone) }()
 	t.Cleanup(func() { cancel(); <-hdone; <-wdone })
-	return url, ln.Addr().String(), inj
+	e.url, e.addr = url, ln.Addr().String()
+	return e
 }
 
 func client(t *testing.T) *http.Client {
@@ -216,6 +246,113 @@ func TestBridgeEndToEnd(t *testing.T) {
 	for inj.count() < 2 {
 		if time.Now().After(deadline) {
 			t.Fatalf("injector got %d events, want 2", inj.count())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestFilesAndClipboardThroughBridge(t *testing.T) {
+	e := setupEnv(t)
+	c := client(t)
+	if res, err := c.Get(e.url); err != nil {
+		t.Fatal(err)
+	} else {
+		res.Body.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	wc, _, err := websocket.Dial(ctx, "ws://"+e.addr+"/ws?host=rmt-box", &websocket.DialOptions{
+		HTTPClient: c, HTTPHeader: http.Header{"Origin": {"http://" + e.addr}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wc.CloseNow()
+	wc.Write(ctx, websocket.MessageText, []byte(`{"type":"connect","data":{}}`))
+	var sid string
+	for sid == "" {
+		_, b, err := wc.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			Type string
+			Data struct{ SID string }
+		}
+		json.Unmarshal(b, &m)
+		if m.Type == "hello" {
+			sid = m.Data.SID
+		}
+	}
+	// Keep draining the websocket so the bridge never blocks.
+	go func() {
+		for {
+			if _, _, err := wc.Read(ctx); err != nil {
+				return
+			}
+		}
+	}()
+	base := "http://" + e.addr
+
+	// Clipboard: viewer -> host and host -> viewer (bridge uses its own local clipboard).
+	time.Sleep(100 * time.Millisecond)
+	e.viewerCB.Write("from laptop")
+	waitFor(t, func() bool { v, _ := e.hostCB.Read(); return v == "from laptop" })
+	e.hostCB.Write("from host")
+	waitFor(t, func() bool { v, _ := e.viewerCB.Read(); return v == "from host" })
+
+	// Upload without the anti-CSRF header is refused.
+	data := make([]byte, 700_000)
+	rand.Read(data)
+	res, _ := c.Post(base+"/api/upload?sid="+sid+"&name=../x.bin", "application/octet-stream", bytes.NewReader(data))
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("upload without header: %d", res.StatusCode)
+	}
+	// Unknown session id.
+	res, _ = c.Get(base + "/api/files?sid=nope")
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("bad sid: %d", res.StatusCode)
+	}
+
+	req, _ := http.NewRequest("POST", base+"/api/upload?sid="+sid+"&name=../x.bin", bytes.NewReader(data))
+	req.Header.Set("X-Rmt-Upload", "1")
+	res, err = c.Do(req)
+	if err != nil || res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("upload: %v %d %s", err, res.StatusCode, b)
+	}
+	res.Body.Close()
+	if b, _ := os.ReadFile(filepath.Join(e.hostDir, "x.bin")); !bytes.Equal(b, data) {
+		t.Fatal("uploaded file missing or corrupted on host")
+	}
+
+	res, _ = c.Get(base + "/api/files?sid=" + sid)
+	var l proto.FileList
+	json.NewDecoder(res.Body).Decode(&l)
+	res.Body.Close()
+	if len(l.Files) != 1 || l.Files[0].Name != "x.bin" {
+		t.Fatalf("list: %+v", l)
+	}
+
+	res, err = c.Get(base + "/api/download?sid=" + sid + "&name=x.bin")
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("download: %v", err)
+	}
+	got, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !bytes.Equal(got, data) || !strings.Contains(res.Header.Get("Content-Disposition"), `filename=x.bin`) {
+		t.Fatalf("download mismatch (%d bytes, cd=%q)", len(got), res.Header.Get("Content-Disposition"))
+	}
+}
+
+func waitFor(t *testing.T, f func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !f() {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -32,9 +32,23 @@
       <option>5</option><option>10</option><option selected>15</option><option>30</option>
     </select></label>
     <label><input id="fit" type="checkbox" checked> Fit</label>
+    <label title="Sync the clipboard between this computer and the host"><input id="clip" type="checkbox" checked> Clipboard</label>
+    <button id="files-btn" type="button">Files</button>
     <span id="status" class="muted"></span>
   </nav>
-  <div id="stage"><canvas id="screen" tabindex="0"></canvas></div>
+  <div id="main">
+    <div id="stage"><canvas id="screen" tabindex="0"></canvas><div id="drop" hidden>Drop to send to host</div></div>
+    <aside id="files" hidden>
+      <header>
+        <strong>Host folder</strong>
+        <button id="files-refresh" type="button" title="Refresh">↻</button>
+      </header>
+      <p id="files-dir" class="muted"></p>
+      <label class="upload">Send files… <input id="upload" type="file" multiple hidden></label>
+      <ul id="transfers"></ul>
+      <ul id="file-list"></ul>
+    </aside>
+  </div>
   <form id="auth" hidden>
     <h2>Unattended access</h2>
     <p id="auth-msg" class="muted"></p>
