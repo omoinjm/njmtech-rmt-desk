@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -21,6 +22,8 @@ import (
 	"rmt-desk/internal/tsnode"
 	"rmt-desk/internal/viewer"
 	"rmt-desk/internal/viewer/web"
+
+	"golang.org/x/term"
 )
 
 const usage = `rmt - rmt-desk viewer
@@ -28,7 +31,9 @@ const usage = `rmt - rmt-desk viewer
 Usage:
   rmt [ui]          open the viewer in your browser (default)
   rmt list          list rmt hosts on your tailnet
-  rmt ping <host>   connect, handshake, and measure round-trip over the session
+  rmt ping [-p] [-totp CODE] <host>
+                    connect, handshake, and measure round-trip over the session
+                    (-p prompts for the host's unattended-access password)
 
 Environment:
   TS_AUTHKEY  Tailscale auth key (first run only; or follow the login URL printed)
@@ -68,11 +73,25 @@ func main() {
 	case "list":
 		err = cmdList(ctx, node)
 	case "ping":
-		if len(os.Args) != 3 {
-			err = errors.New("usage: rmt ping <host>")
-		} else {
-			err = cmdPing(ctx, node, os.Args[2])
+		fs := flag.NewFlagSet("ping", flag.ExitOnError)
+		askPw := fs.Bool("p", false, "prompt for password")
+		totp := fs.String("totp", "", "authenticator code")
+		fs.Parse(os.Args[2:])
+		if fs.NArg() != 1 {
+			err = errors.New("usage: rmt ping [-p] [-totp CODE] <host>")
+			break
 		}
+		auth := viewer.Auth{TOTP: *totp}
+		if *askPw {
+			fmt.Fprint(os.Stderr, "password: ")
+			b, perr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			if perr != nil {
+				log.Fatal(perr)
+			}
+			auth.Password = string(b)
+		}
+		err = cmdPing(ctx, node, fs.Arg(0), auth)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -99,10 +118,10 @@ func cmdList(ctx context.Context, n *tsnode.Node) error {
 	return tw.Flush()
 }
 
-func cmdPing(ctx context.Context, n *tsnode.Node, host string) error {
+func cmdPing(ctx context.Context, n *tsnode.Node, host string, auth viewer.Auth) error {
 	addr := host + ":" + strconv.Itoa(config.DefaultPort)
 	t0 := time.Now()
-	s, err := viewer.Connect(ctx, n.Srv.Dial, addr, "")
+	s, err := viewer.Connect(ctx, n.Srv.Dial, addr, auth)
 	if err != nil {
 		return err
 	}

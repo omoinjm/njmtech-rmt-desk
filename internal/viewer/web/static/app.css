@@ -36,3 +36,14 @@ button:hover { border-color: var(--accent); }
 #stage { flex: 1; overflow: auto; display: flex; }
 #screen { margin: auto; outline: none; cursor: default; image-rendering: auto; }
 #stage.fit #screen { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+#auth { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100% - 32px));
+  background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 20px;
+  display: grid; gap: 12px; }
+#auth[hidden] { display: none; }
+#auth h2 { margin: 0; font-size: 17px; }
+#auth p { margin: 0; }
+#auth label { display: grid; gap: 4px; font-size: 13px; }
+#auth input { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+#auth .row { display: flex; gap: 8px; flex-wrap: wrap; }
+#auth button[type=submit] { background: var(--accent); color: #fff; border-color: var(--accent); }

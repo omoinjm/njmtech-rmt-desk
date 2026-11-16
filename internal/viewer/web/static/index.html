@@ -35,6 +35,16 @@
     <span id="status" class="muted"></span>
   </nav>
   <div id="stage"><canvas id="screen" tabindex="0"></canvas></div>
+  <form id="auth" hidden>
+    <h2>Unattended access</h2>
+    <p id="auth-msg" class="muted"></p>
+    <label>Password <input id="auth-pw" type="password" autocomplete="current-password"></label>
+    <label>Authenticator code <input id="auth-totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="if enrolled"></label>
+    <div class="row">
+      <button type="submit">Connect</button>
+      <button type="button" id="auth-ask">Ask host user instead</button>
+    </div>
+  </form>
 </section>
 <script src="/app.js"></script>
 </body>

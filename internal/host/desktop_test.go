@@ -70,6 +70,7 @@ func startDesktop(t *testing.T, scr *fakeScreen, inj *recInjector) *viewer.Sessi
 	d := &Desktop{Capturer: scr, NewInjector: func() (input.Injector, error) { return inj, nil }, Logf: t.Logf}
 	s := &Server{
 		Policy:   authz.Policy{AllowedLogins: []string{"alice@example.com"}},
+		Gate:     autoGate(),
 		Resolver: staticResolver{id: authz.Identity{Login: "alice@example.com"}},
 		Logf:     t.Logf,
 		Handlers: map[string]StreamHandler{proto.StreamVideo: d.Video, proto.StreamInput: d.Input},
@@ -77,7 +78,7 @@ func startDesktop(t *testing.T, scr *fakeScreen, inj *recInjector) *viewer.Sessi
 	done := make(chan struct{})
 	go func() { s.Serve(ctx, ln); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
-	sess, err := viewer.Connect(ctx, tcpDial, ln.Addr().String(), "")
+	sess, err := viewer.Connect(ctx, tcpDial, ln.Addr().String(), viewer.Auth{})
 	if err != nil {
 		t.Fatal(err)
 	}

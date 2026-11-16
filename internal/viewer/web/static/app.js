@@ -44,6 +44,8 @@ $("manual").onsubmit = (e) => {
 let ws = null;
 let screenW = 0, screenH = 0, display = 0;
 let viewOnly = false;
+let currentHost = null;
+let creds = { password: "", totp: "" }; // kept in memory only, per host
 const canvas = $("screen");
 const ctx2d = canvas.getContext("2d");
 const held = new Set(); // key codes held in the browser
@@ -59,15 +61,24 @@ function videoReq() {
 }
 
 function connect(host) {
+  if (host !== currentHost) creds = { password: "", totp: "" };
+  currentHost = host;
+  $("auth").hidden = true;
   $("home").hidden = true;
   $("session").hidden = false;
   $("title").textContent = host;
   status("connecting…");
   viewOnly = false;
-  ws = new WebSocket(`ws://${location.host}/ws?host=${encodeURIComponent(host)}`);
-  ws.binaryType = "arraybuffer";
-  ws.onopen = () => {};
-  ws.onmessage = (ev) => {
+  if (ws) ws.close();
+  const sock = new WebSocket(`ws://${location.host}/ws?host=${encodeURIComponent(host)}`);
+  ws = sock;
+  sock.binaryType = "arraybuffer";
+  sock.onopen = () => {
+    send("connect", creds);
+    creds.totp = ""; // one-time code: never reuse
+  };
+  sock.onmessage = (ev) => {
+    if (ws !== sock) return; // stale socket from a previous attempt
     if (typeof ev.data !== "string") { enqueueFrame(ev.data); return; }
     const m = JSON.parse(ev.data);
     switch (m.type) {
@@ -89,19 +100,47 @@ function connect(host) {
         sel.value = display;
         break;
       }
+      case "status":
+        status(m.error);
+        break;
       case "view-only":
         viewOnly = true;
         status("view-only: " + m.error);
         break;
       case "error":
         status("error: " + m.error);
+        if (m.code === "auth_required" || m.code === "auth_failed") showAuth(m.error);
         break;
     }
   };
-  ws.onclose = () => { status((($("status").textContent.startsWith("error")) ? $("status").textContent + " · " : "") + "disconnected"); ws = null; };
+  sock.onclose = () => {
+    if (ws !== sock) return;
+    ws = null;
+    const st = $("status").textContent;
+    status((st.startsWith("error") ? st + " · " : "") + "disconnected");
+  };
 }
 
+function showAuth(message) {
+  $("auth-msg").textContent = message;
+  $("auth-pw").value = "";
+  $("auth-totp").value = "";
+  $("auth").hidden = false;
+  $("auth-pw").focus();
+}
+$("auth").onsubmit = (e) => {
+  e.preventDefault();
+  creds = { password: $("auth-pw").value, totp: $("auth-totp").value.trim() };
+  connect(currentHost);
+};
+$("auth-ask").onclick = () => {
+  creds = { password: "", totp: "" };
+  connect(currentHost);
+};
+
 function disconnect() {
+  creds = { password: "", totp: "" };
+  $("auth").hidden = true;
   releaseAll();
   if (ws) ws.close();
   ws = null;

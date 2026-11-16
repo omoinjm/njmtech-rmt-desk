@@ -58,7 +58,8 @@ func setup(t *testing.T) (string, string, *rec) {
 	hl, _ := net.Listen("tcp", "127.0.0.1:0")
 	desk := &host.Desktop{Capturer: screen{}, NewInjector: func() (input.Injector, error) { return inj, nil }, Logf: t.Logf}
 	hs := &host.Server{
-		Policy: authz.Policy{AllowedLogins: []string{"alice@example.com"}}, Resolver: allowAll{}, Logf: t.Logf,
+		Policy: authz.Policy{AllowedLogins: []string{"alice@example.com"}},
+		Gate:   autoGate(), Resolver: allowAll{}, Logf: t.Logf,
 		Handlers: map[string]host.StreamHandler{proto.StreamVideo: desk.Video, proto.StreamInput: desk.Input},
 	}
 	hdone := make(chan struct{})
@@ -188,6 +189,7 @@ func TestBridgeEndToEnd(t *testing.T) {
 			}
 		}
 	}
+	wc.Write(ctx, websocket.MessageText, []byte(`{"type":"connect","data":{}}`))
 	readText("hello")
 	wc.Write(ctx, websocket.MessageText, []byte(`{"type":"video","data":{"display":0,"fps":30,"quality":50}}`))
 	info := readText("info")

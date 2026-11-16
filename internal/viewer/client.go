@@ -23,15 +23,23 @@ type Session struct {
 // Dialer abstracts tsnet.Server.Dial so tests can use plain TCP.
 type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// Connect dials addr, performs the handshake, and returns a multiplexed session.
-func Connect(ctx context.Context, dial Dialer, addr, password string) (*Session, error) {
+// Auth carries optional unattended-access credentials.
+type Auth struct {
+	Password string
+	TOTP     string
+}
+
+// Connect dials addr, performs the handshake, and returns a multiplexed
+// session. Host refusals are returned as *proto.RemoteError (check Err.Code).
+func Connect(ctx context.Context, dial Dialer, addr string, auth Auth) (*Session, error) {
 	c, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+	// Generous: the host may be showing a consent dialog.
+	_ = c.SetDeadline(time.Now().Add(100 * time.Second))
 	if err := proto.WriteJSON(c, proto.MsgHello, proto.Hello{
-		Version: proto.Version, Client: ClientName, Password: password,
+		Version: proto.Version, Client: ClientName, Password: auth.Password, TOTP: auth.TOTP,
 	}); err != nil {
 		c.Close()
 		return nil, err
@@ -39,6 +47,9 @@ func Connect(ctx context.Context, dial Dialer, addr, password string) (*Session,
 	var ack proto.HelloAck
 	if err := proto.ReadJSON(c, proto.MsgHelloAck, &ack); err != nil {
 		c.Close()
+		if _, ok := err.(*proto.RemoteError); ok {
+			return nil, err
+		}
 		return nil, fmt.Errorf("handshake: %w", err)
 	}
 	_ = c.SetDeadline(time.Time{})

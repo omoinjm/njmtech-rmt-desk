@@ -6,16 +6,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"rmt-desk/internal/access"
 	"rmt-desk/internal/authz"
 
 	"github.com/BurntSushi/toml"
 )
 
 type Host struct {
-	Hostname string       `toml:"hostname"`
-	Port     int          `toml:"port"`
-	Tags     []string     `toml:"tags"`
-	Policy   authz.Policy `toml:"policy"`
+	Hostname string        `toml:"hostname"`
+	Port     int           `toml:"port"`
+	Tags     []string      `toml:"tags"`
+	Policy   authz.Policy  `toml:"policy"`
+	Access   access.Config `toml:"access"`
 }
 
 const (
@@ -25,7 +27,10 @@ const (
 
 func DefaultHost() Host {
 	hn, _ := os.Hostname()
-	return Host{Hostname: "rmt-" + hn, Port: DefaultPort, Tags: []string{HostTag}}
+	return Host{
+		Hostname: "rmt-" + hn, Port: DefaultPort, Tags: []string{HostTag},
+		Access: access.Config{Mode: access.Both, Permissions: access.AllPermissions, PromptSecs: 30},
+	}
 }
 
 // LoadHost reads path, returning defaults if it doesn't exist.

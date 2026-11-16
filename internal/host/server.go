@@ -10,9 +10,11 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
+	"rmt-desk/internal/access"
 	"rmt-desk/internal/audit"
 	"rmt-desk/internal/authz"
 	"rmt-desk/internal/proto"
@@ -23,6 +25,7 @@ type StreamHandler func(ctx context.Context, id authz.Identity, conn net.Conn)
 
 type Server struct {
 	Policy   authz.Policy
+	Gate     *access.Gate // password/TOTP/consent; required
 	Resolver authz.Resolver
 	Audit    *audit.Log
 	HostName string
@@ -77,24 +80,41 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	if err != nil {
 		s.logf("deny %s: %v", remote, err)
 		s.Audit.Write(audit.Event{Kind: "deny", Peer: id.String(), Remote: remote, Detail: err.Error()})
-		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Message: "access denied"})
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeDenied, Message: "access denied"})
 		return
 	}
 
-	// 2. Handshake (bounded in time).
-	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	// 2. Handshake. Bounded in time, but long enough for a consent dialog.
+	_ = c.SetDeadline(time.Now().Add(90 * time.Second))
 	var hello proto.Hello
 	if err := proto.ReadJSON(c, proto.MsgHello, &hello); err != nil {
 		s.logf("handshake %s: %v", id, err)
 		return
 	}
 	if hello.Version != proto.Version {
-		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeVersion,
 			Message: fmt.Sprintf("protocol version mismatch: host=%d viewer=%d", proto.Version, hello.Version)})
 		return
 	}
-	// TODO(phase3): unattended password/TOTP + attended consent prompt.
-	granted := []string{"view", "input", "clipboard", "files"}
+
+	// 3. Session admission: password/TOTP or consent prompt.
+	if s.Gate == nil {
+		_ = proto.WriteJSON(c, proto.MsgError, proto.Error{Code: proto.CodeDenied, Message: "host has no access gate"})
+		return
+	}
+	actx2, cancel2 := context.WithCancel(ctx)
+	// If the viewer hangs up while a dialog is showing, stop waiting.
+	stopWatch := watchClose(c, cancel2)
+	granted, err := s.Gate.Admit(actx2, id, hello)
+	stopWatch()
+	cancel2()
+	if err != nil {
+		e := access.AsError(err)
+		s.logf("refused %s: %s", id, e.Message)
+		s.Audit.Write(audit.Event{Kind: "refuse", Peer: id.String(), Remote: remote, Detail: e.Code + ": " + e.Message})
+		_ = proto.WriteJSON(c, proto.MsgError, e)
+		return
+	}
 	host := s.HostName
 	if host == "" {
 		host, _ = os.Hostname()
@@ -107,7 +127,8 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 	_ = c.SetDeadline(time.Time{})
 
 	s.logf("session start: %s (%s)", id, hello.Client)
-	s.Audit.Write(audit.Event{Kind: "connect", Peer: id.String(), Remote: remote, Detail: hello.Client})
+	s.Audit.Write(audit.Event{Kind: "connect", Peer: id.String(), Remote: remote,
+		Detail: fmt.Sprintf("%s granted=%v", hello.Client, granted)})
 	start := time.Now()
 	defer func() {
 		s.Audit.Write(audit.Event{Kind: "disconnect", Peer: id.String(), Remote: remote,
@@ -115,7 +136,7 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		s.logf("session end: %s", id)
 	}()
 
-	// 3. Multiplexed streams.
+	// 4. Multiplexed streams, each gated by the session's permissions.
 	sess, err := proto.ServerSession(c)
 	if err != nil {
 		return
@@ -133,6 +154,11 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 			return
 		}
 		h, ok := s.Handlers[kind]
+		if ok && !slices.Contains(granted, streamPermission[kind]) {
+			_ = proto.WriteJSON(st, proto.MsgError, proto.Error{Code: proto.CodeDenied, Message: "permission denied: " + kind})
+			st.Close()
+			continue
+		}
 		if !ok {
 			_ = proto.WriteJSON(st, proto.MsgError, proto.Error{Message: "unsupported stream: " + kind})
 			st.Close()
@@ -140,5 +166,50 @@ func (s *Server) handleConn(ctx context.Context, c net.Conn) {
 		}
 		hwg.Add(1)
 		go func() { defer hwg.Done(); h(sctx, id, st) }()
+	}
+}
+
+// streamPermission maps each stream kind to the permission it needs.
+var streamPermission = map[string]string{
+	proto.StreamControl:   "view",
+	proto.StreamVideo:     "view",
+	proto.StreamInput:     "input",
+	proto.StreamClipboard: "clipboard",
+	proto.StreamFiles:     "files",
+}
+
+// watchClose cancels when the peer closes the connection while we are not
+// otherwise reading from it (e.g. during a consent dialog). The returned
+// func stops the watcher and restores normal reads.
+func watchClose(c net.Conn, cancel func()) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		var b [1]byte
+		for {
+			_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			_, err := c.Read(b[:])
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					continue
+				}
+				cancel()
+				return
+			}
+			// The viewer must not send anything before HelloAck.
+			cancel()
+			return
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+		_ = c.SetReadDeadline(time.Time{})
 	}
 }

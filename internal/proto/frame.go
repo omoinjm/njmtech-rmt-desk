@@ -31,6 +31,10 @@ const (
 	MsgVideoInfo  MsgType = 11 // host -> viewer (video stream): VideoInfo
 	MsgVideoFrame MsgType = 12 // host -> viewer (video stream): binary tiles frame
 	MsgInput      MsgType = 13 // viewer -> host (input stream): input.Event JSON
+
+	// Internal: service <-> session helper (never sent over the tailnet).
+	MsgConsentReq  MsgType = 20 // ConsentReq
+	MsgConsentResp MsgType = 21 // ConsentResp
 )
 
 var ErrFrameTooLarge = errors.New("proto: frame exceeds MaxFrame")
@@ -86,7 +90,7 @@ func ReadJSON(r io.Reader, want MsgType, v any) error {
 	if t == MsgError {
 		var e Error
 		_ = json.Unmarshal(b, &e)
-		return fmt.Errorf("remote error: %s", e.Message)
+		return &RemoteError{e}
 	}
 	if t != want {
 		return fmt.Errorf("proto: got message type %d, want %d", t, want)
@@ -98,7 +102,8 @@ func ReadJSON(r io.Reader, want MsgType, v any) error {
 type Hello struct {
 	Version  int    `json:"version"`
 	Client   string `json:"client"`             // e.g. "rmt/0.1.0"
-	Password string `json:"password,omitempty"` // unattended access secret (phase 3)
+	Password string `json:"password,omitempty"` // unattended access password
+	TOTP     string `json:"totp,omitempty"`     // authenticator code, if enrolled
 }
 
 // HelloAck is the host's reply on successful admission.
@@ -111,8 +116,19 @@ type HelloAck struct {
 }
 
 type Error struct {
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
 }
+
+// Error codes the viewer reacts to.
+const (
+	CodeDenied       = "denied"        // not allowlisted / declined / generic
+	CodeAuthRequired = "auth_required" // host wants a password (+TOTP)
+	CodeAuthFailed   = "auth_failed"   // wrong password or code
+	CodeLocked       = "locked"        // too many failures
+	CodeBusy         = "busy"          // another request pending
+	CodeVersion      = "version"       // protocol mismatch
+)
 
 // Stream kinds, sent in StreamOpen as the first frame of each yamux stream.
 const (
@@ -121,6 +137,7 @@ const (
 	StreamInput     = "input"
 	StreamClipboard = "clipboard"
 	StreamFiles     = "files"
+	StreamConsent   = "consent" // internal: service -> helper only
 )
 
 type StreamOpen struct {
@@ -145,4 +162,19 @@ type DisplayInfo struct {
 	Index  int `json:"index"`
 	Width  int `json:"width"`
 	Height int `json:"height"`
+}
+
+// RemoteError is an Error frame received from the peer.
+type RemoteError struct{ Err Error }
+
+func (e *RemoteError) Error() string { return "remote error: " + e.Err.Message }
+
+type ConsentReq struct {
+	Who       string `json:"who"`
+	TimeoutMS int64  `json:"timeout_ms"`
+}
+
+type ConsentResp struct {
+	Allow bool   `json:"allow"`
+	Error string `json:"error,omitempty"`
 }

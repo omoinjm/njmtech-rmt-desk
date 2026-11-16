@@ -14,16 +14,26 @@ your Tailscale tailnet. No public ports, no third-party relay. Windows / Linux /
 | 0 | REA research — see `docs/research/` | todo |
 | 1 | tsnet node, WhoIs allowlist, handshake, yamux streams, `rmt list/ping` | **done** |
 | 2 | Screen capture + dirty-tile JPEG video + mouse/keyboard, browser viewer | **done** (needs on-device testing) |
-| 3 | Unattended service, password/TOTP, attended consent | next |
-| 4 | Clipboard + file transfer | |
+| 3 | Service install, Windows session helper, password (argon2id) + TOTP, consent prompt, lockout, permissions | **done** (needs on-device testing) |
+| 4 | Clipboard + file transfer | next |
 | 5 | H.264/WebCodecs, multi-monitor, Wayland, signed releases | |
 
 ## Security model
 1. **Network:** listens only on the tailnet via tsnet. Restrict with a Tailscale grant (below).
 2. **Identity:** each connection's peer is resolved with `WhoIs`; only allowlisted logins/tags
    are admitted (deny by default). In-band claims are never trusted for identity.
-3. **Audit:** connects, denials and disconnects are appended to `audit.log` (0600).
-4. Coming: unattended password (argon2id) + TOTP, host consent prompt, per-session permissions.
+3. **Session admission** (after identity), per `rmtd mode`:
+   - `attended` — a native Allow/Deny dialog on the host (defaults to Deny after 30 s).
+   - `unattended` — password (argon2id) and, if enrolled, a TOTP code; no prompt.
+   - `both` (default) — a correct password admits; with no password the host user is asked.
+   - Without a password set, the host is always attended-only.
+   - 5 failed attempts (or declined prompts) per peer → lockout, 1 min doubling to 1 h.
+     TOTP codes can't be replayed. Only one consent dialog at a time.
+4. **Permissions:** `view`, `input`, `clipboard`, `files` granted per session (config
+   `access.permissions`), enforced by the host on every stream. One controller at a time.
+5. **Audit:** connects, refusals and disconnects are appended to `audit.log` (0600).
+6. **State protection:** the state dir (node key, config, logs) is 0700 / on Windows a
+   protected DACL limited to SYSTEM + Administrators.
 
 ### Recommended tailnet policy
 ```jsonc
@@ -43,22 +53,39 @@ Also enable **Tailnet Lock** so a compromised control plane can't add nodes.
 ```sh
 go build -o bin/ ./cmd/...
 
-# on the machine to control
-./bin/rmtd allow you@example.com
-TS_AUTHKEY=tskey-auth-... ./bin/rmtd up     # tagged, pre-approved key; only needed first run
+# --- on the machine to control ---
+./bin/rmtd allow you@example.com           # who may connect (tailnet login or tag:...)
+TS_AUTHKEY=tskey-auth-... ./bin/rmtd up    # first run: joins the tailnet; Ctrl-C when it says "serving"
 
-# on your laptop
-./bin/rmt            # opens the viewer in your browser
-./bin/rmt list
-./bin/rmt ping rmt-<hostname>
+# optional: unattended access
+./bin/rmtd passwd                          # set a password (>= 10 chars)
+./bin/rmtd totp enable                     # + authenticator app code
+
+# run it permanently
+./bin/rmtd install && ./bin/rmtd start     # Windows: elevated prompt; state in %ProgramData%\rmt-desk
+
+# --- on your laptop ---
+./bin/rmt                                  # opens the viewer in your browser
+./bin/rmt ping -p rmt-<hostname>           # CLI check (prompts for the password)
 ```
 
-## Platform notes (phase 2)
-| OS | Capture | Input | Requirements |
-|---|---|---|---|
-| Linux | X11 (XWayland ok) | XTEST | `DISPLAY` set; run inside the user's graphical session |
-| Windows | GDI | `SendInput` (scancodes) | run in the logged-in user's session (service mode = phase 3) |
-| macOS | ScreenCaptureKit | CGEvent | build natively with `CGO_ENABLED=1`; grant **Screen Recording** + **Accessibility** to `rmtd` |
+## Platform notes
+| OS | Capture | Input | Service | Consent dialog |
+|---|---|---|---|---|
+| Windows | GDI | `SendInput` (scancodes) | LocalSystem service + per-session **helper** launched with the console user's token | `MessageBoxTimeout` |
+| macOS | ScreenCaptureKit | CGEvent | per-user LaunchAgent | `osascript` dialog |
+| Linux | X11 (XWayland ok) | XTEST | systemd **user** unit bound to `graphical-session.target` | `zenity` / `kdialog` |
+
+How the Windows split works: a service in session 0 can't see the desktop, so `rmtd`
+keeps the tailnet, allowlist, password checks and audit log in the service and launches
+`rmtd helper` inside the active console session (as the logged-on user, not SYSTEM),
+talking to it over inherited stdio pipes. The helper is restarted if it crashes or when
+the console session changes (user switch).
+
+Known limitations (by design for now, least privilege):
+- **Windows:** no access at the logon/lock screen or to UAC prompts/elevated windows (UIPI).
+- **macOS/Linux:** a user must be logged in to the desktop; macOS needs Screen Recording +
+  Accessibility granted to `rmtd`; Linux needs X11/XWayland (no native Wayland yet).
 
 Keys are sent as physical key positions (`KeyboardEvent.code`), so the *host's*
 keyboard layout decides the character. Held keys/buttons are released automatically if

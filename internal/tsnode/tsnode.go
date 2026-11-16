@@ -33,7 +33,7 @@ func Start(ctx context.Context, o Options) (*Node, error) {
 		return nil, err
 	}
 	// Tighten perms even if the dir pre-existed.
-	if err := os.Chmod(o.StateDir, 0o700); err != nil {
+	if err := SecureDir(o.StateDir); err != nil {
 		return nil, err
 	}
 	srv := &tsnet.Server{

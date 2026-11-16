@@ -170,6 +170,14 @@ type msg struct {
 	Type  string          `json:"type"`
 	Data  json.RawMessage `json:"data,omitempty"`
 	Error string          `json:"error,omitempty"`
+	Code  string          `json:"code,omitempty"`
+}
+
+// connectReq is the browser's first message; credentials travel over the
+// websocket, never in a URL.
+type connectReq struct {
+	Password string `json:"password"`
+	TOTP     string `json:"totp"`
 }
 
 func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
@@ -192,12 +200,28 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 		return wc.Write(ctx, websocket.MessageText, b)
 	}
 	fail := func(err error) {
-		_ = send(msg{Type: "error", Error: err.Error()})
+		m := msg{Type: "error", Error: err.Error()}
+		if re, ok := err.(*proto.RemoteError); ok {
+			m.Error, m.Code = re.Err.Message, re.Err.Code
+		}
+		_ = send(m)
 		wc.Close(websocket.StatusNormalClosure, "")
 	}
 
-	dctx, dcancel := context.WithTimeout(ctx, 20*time.Second)
-	sess, err := viewer.Connect(dctx, s.Dial, net.JoinHostPort(host, strconv.Itoa(config.DefaultPort)), "")
+	var creq connectReq
+	rctx, rcancel := context.WithTimeout(ctx, 10*time.Second)
+	_, first, err := wc.Read(rctx)
+	rcancel()
+	var m0 msg
+	if err != nil || json.Unmarshal(first, &m0) != nil || m0.Type != "connect" {
+		return
+	}
+	_ = json.Unmarshal(m0.Data, &creq)
+
+	_ = send(msg{Type: "status", Error: "connecting… (the host may be asking its user for permission)"})
+	dctx, dcancel := context.WithTimeout(ctx, 100*time.Second)
+	sess, err := viewer.Connect(dctx, s.Dial, net.JoinHostPort(host, strconv.Itoa(config.DefaultPort)),
+		viewer.Auth{Password: creq.Password, TOTP: creq.TOTP})
 	dcancel()
 	if err != nil {
 		fail(err)
