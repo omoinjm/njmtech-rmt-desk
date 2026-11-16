@@ -4,6 +4,7 @@ package tsnode
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,7 +42,8 @@ func Start(ctx context.Context, o Options) (*Node, error) {
 		Dir:           o.StateDir,
 		AuthKey:       o.AuthKey,
 		AdvertiseTags: o.Tags,
-		UserLogf:      func(string, ...any) {},
+		// User-facing messages, notably the login URL when no auth key is set.
+		UserLogf: log.Printf,
 	}
 	if !o.Verbose {
 		srv.Logf = func(string, ...any) {}
