@@ -18,7 +18,7 @@
 ## Release
 - [x] GitHub repo, CI green on Windows/Linux/macOS (app built with real Wails tags).
 - [x] First release: `v0.2.0-rc2` pre-release, all 15 artifacts + signed SHA256SUMS.
-- [ ] Promote to `v0.2.0` once the on-device tests below pass.
+- [x] `v0.2.0` released (Latest), before on-device tests; fixes from them go into `v0.2.1`.
 
 ## Testing
 - [ ] Windows app end to end on two PCs: "Allow remote access" (UAC + wizard), connect,
