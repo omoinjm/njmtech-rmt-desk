@@ -30,4 +30,7 @@ jobs:
         run: go build -tags desktop,production -o NUL ./cmd/rmt-desk
       - name: Desktop app (macOS)
         if: runner.os == 'macOS'
+        # What the Wails CLI adds itself on macOS 11+ (file dialogs use UTType).
+        env:
+          CGO_LDFLAGS: -framework UniformTypeIdentifiers -mmacosx-version-min=10.13
         run: go build -tags desktop,production -o /dev/null ./cmd/rmt-desk
