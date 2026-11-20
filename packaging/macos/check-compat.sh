@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Fails if a Mach-O binary wouldn't load on the oldest macOS we support
-# (LSMinimumSystemVersion): a deployment target above it, or a hard link to a
+# (LSMinimumSystemVersion; Go 1.27 needs 13): a deployment target above it, or a hard link to a
 # framework that doesn't exist there (ScreenCaptureKit is macOS 12.3+).
 set -euo pipefail
-min="${MACOS_MIN:-11.0}"
+min="${MACOS_MIN:-13.0}"
 status=0
 for bin in "$@"; do
   for arch in $(lipo -archs "$bin"); do

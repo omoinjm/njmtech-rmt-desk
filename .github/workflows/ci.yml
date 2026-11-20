@@ -17,8 +17,8 @@ jobs:
       - run: go test -race ./...
       - run: go build -o bin/ ./cmd/...
         env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
-      - name: macOS 11 compatibility (deployment target, no hard ScreenCaptureKit link)
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+      - name: macOS 13 compatibility (deployment target, no hard ScreenCaptureKit link)
         if: runner.os == 'macOS'
         run: packaging/macos/check-compat.sh bin/rmtd bin/rmt
 

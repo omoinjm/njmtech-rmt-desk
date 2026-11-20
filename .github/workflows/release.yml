@@ -29,9 +29,9 @@ permissions:
 
 env:
   WAILS_VERSION: v2.17.1
-  # Oldest macOS we support (Info.plist LSMinimumSystemVersion); without it
+  # Oldest macOS we support (Info.plist LSMinimumSystemVersion; Go 1.27 needs 13); without it
   # clang targets the runner's macOS and the binaries won't start on older ones.
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
   NFPM_VERSION: v2.49.0
   # SSL.com CodeSignTool (portable build; runs on the runner's Java).
   # Not published with digests: pinned to the hash of the v1.3.2 asset.

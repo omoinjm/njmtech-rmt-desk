@@ -3,16 +3,18 @@
 package capture
 
 // macOS capture without kbinani/screenshot: its #cgo line links
-// ScreenCaptureKit unconditionally (cgo ignores the surrounding #if), so the
-// binary would not even load before macOS 12.3. Here nothing references
-// ScreenCaptureKit or the CoreGraphics capture calls at link time:
+// ScreenCaptureKit unconditionally (cgo ignores the surrounding #if), and
+// built against a new SDK it calls SCScreenshotManager (macOS 14+) on every
+// version. Here nothing references ScreenCaptureKit or the CoreGraphics
+// capture calls at link time, and the version check happens at run time
+// (the -mmacosx-version-min below keeps clang from folding @available):
 //   - macOS 14+: ScreenCaptureKit, dlopen'ed and reached through
 //     NSClassFromString (CGDisplayCreateImage is obsoleted in macOS 15).
 //   - older:     CGDisplayCreateImage, looked up with dlsym (so it also
 //     compiles with a deployment target where it's marked unavailable).
 
 /*
-#cgo CFLAGS: -x objective-c
+#cgo CFLAGS: -x objective-c -mmacosx-version-min=13.0
 #cgo LDFLAGS: -framework CoreGraphics -framework CoreFoundation -framework Foundation
 #include <dlfcn.h>
 #include <CoreGraphics/CoreGraphics.h>
