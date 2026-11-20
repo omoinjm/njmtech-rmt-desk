@@ -1,6 +1,8 @@
 package web
 
 import (
+	"rmt-desk/internal/viewer/bridge"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,7 +58,7 @@ func TestEmbeddedWebsocketAuth(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var m msg
+		var m bridge.Msg
 		json.Unmarshal(b, &m)
 		if m.Type == "hello" {
 			var h struct {

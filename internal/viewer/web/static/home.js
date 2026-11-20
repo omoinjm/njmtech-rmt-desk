@@ -1,7 +1,7 @@
 // Home: sign-in gate (app), "This device" card (app), device list.
 "use strict";
 
-import { api, isApp } from "./platform.js";
+import { api, isApp, isWeb } from "./platform.js";
 import { $, el, icon, show, toast, errText, osIcon, store } from "./ui.js";
 import { connect } from "./session.js";
 import { openSetup } from "./setup.js";
@@ -12,11 +12,11 @@ let lastHosts = [];
 
 export async function start(i) {
   info = i;
-  if (isApp) await signInGate();
+  if (isApp || isWeb) await signInGate();
   enterHome();
 }
 
-// ---------- sign-in (app only) ----------
+// ---------- sign-in (app and web viewer) ----------
 async function signInGate() {
   let st = await api.viewerState().catch(() => null);
   if (st?.Running) { setMe(st); return; }
@@ -25,7 +25,9 @@ async function signInGate() {
   $("signin-btn").onclick = async () => {
     try {
       await api.signIn();
-      msg.textContent = "Finish signing in in your browser. This window continues automatically.";
+      msg.textContent = isWeb
+        ? "Finish signing in in the new tab. This page continues automatically."
+        : "Finish signing in in your browser. This window continues automatically.";
     } catch (e) { msg.textContent = errText(e); }
   };
   for (;;) {
@@ -34,6 +36,7 @@ async function signInGate() {
     $("signin-btn").disabled = !st.AuthURL;
     if (st.Error) msg.textContent = st.Error;
     else if (!st.AuthURL) msg.textContent = "Starting…";
+    else if (msg.textContent === "Starting…") msg.textContent = "";
     await sleep(1000);
   }
   setMe(st);

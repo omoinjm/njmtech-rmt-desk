@@ -2,7 +2,7 @@
 // clipboard toggle, files drawer, stats, reconnect.
 "use strict";
 
-import { api } from "./platform.js";
+import { api, isWeb } from "./platform.js";
 import { $, el, icon, show, toast, errText, fmtSize, refusalText, store } from "./ui.js";
 
 let onLeave = () => {};
@@ -129,8 +129,9 @@ function onMessage(m) {
       autoRetried = false;
       sid = m.data.sid;
       granted = m.data.granted || [];
-      $("files-btn").hidden = !granted.includes("files");
-      $("clip").hidden = !granted.includes("clipboard");
+      // The web viewer has no file transfer or clipboard sync yet.
+      $("files-btn").hidden = !granted.includes("files") || !sid;
+      $("clip").hidden = !granted.includes("clipboard") || isWeb;
       if (!$("clip").classList.contains("on")) send("clipboard", { enabled: false });
       status(`${{ windows: "Windows", darwin: "macOS", linux: "Linux" }[m.data.os] || m.data.os} · you are ${m.data.identity}`);
       dot("on");

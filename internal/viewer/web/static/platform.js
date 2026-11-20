@@ -1,10 +1,13 @@
 // Platform adapter: the same UI runs inside the rmt-desk app (Wails:
-// native bindings at window.go.main.App) or in a browser tab opened by
-// `rmt ui` (same-origin HTTP API + cookie).
+// native bindings at window.go.main.App), in a browser tab opened by
+// `rmt ui` (same-origin HTTP API + cookie), or as the WebAssembly web
+// viewer (cmd/rmt-web: a Tailscale node in the page, globalThis.rmtWeb).
 "use strict";
 
 const G = window.go?.main?.App;
+const W = !G && globalThis.rmtWeb;
 export const isApp = !!G;
+export const isWeb = !!W;
 
 // Tiny event hub for browser-mode transfer progress.
 const listeners = new Set();
@@ -110,4 +113,46 @@ const app = isApp && {
   closeWindow: () => G.CloseWindow(),
 };
 
-export const api = isApp ? app : browser;
+// A WebSocket look-alike over rmtWeb.open (session.js uses only these bits).
+class PageSocket {
+  constructor(host) {
+    this.readyState = 0; // CONNECTING
+    this.binaryType = "arraybuffer";
+    this.onopen = this.onmessage = this.onclose = null;
+    this.ch = W.open(host,
+      (binary, data) => this.onmessage?.({ data: binary ? data.buffer : data }),
+      () => {
+        if (this.readyState === 3) return;
+        this.readyState = 3; // CLOSED
+        this.onclose?.({});
+      });
+    setTimeout(() => {
+      if (this.readyState !== 0) return;
+      this.readyState = 1; // OPEN
+      this.onopen?.({});
+    }, 0);
+  }
+  send(text) { if (this.readyState === 1) this.ch.send(text); }
+  close() { if (this.readyState < 2) { this.readyState = 2; this.ch.close(); } }
+}
+
+let webState = null; // last state, so signIn can open the link synchronously (popup blockers)
+const notInWeb = async () => { throw new Error("Not available in the web viewer yet."); };
+
+const web = isWeb && {
+  ...browser,
+  info: async () => ({ mode: "main", os: "", hostSupported: false, browser: true, web: true }),
+  viewerState: async () => (webState = await W.state()),
+  signIn: async () => {
+    if (!webState?.AuthURL) throw new Error("No sign-in link yet; try again in a moment.");
+    window.open(webState.AuthURL, "_blank", "noopener");
+  },
+  listHosts: () => W.listHosts(),
+  openSocket: async (host) => new PageSocket(host),
+  listFiles: notInWeb,
+  pickAndUpload: () => {},
+  uploadFiles: null,
+  download: notInWeb,
+};
+
+export const api = isApp ? app : isWeb ? web : browser;
