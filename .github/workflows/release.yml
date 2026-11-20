@@ -29,6 +29,9 @@ permissions:
 
 env:
   WAILS_VERSION: v2.17.1
+  # Oldest macOS we support (Info.plist LSMinimumSystemVersion); without it
+  # clang targets the runner's macOS and the binaries won't start on older ones.
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
   NFPM_VERSION: v2.49.0
   # SSL.com CodeSignTool (portable build; runs on the runner's Java).
   # Not published with digests: pinned to the hash of the v1.3.2 asset.
@@ -78,6 +81,7 @@ jobs:
             go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
               -o "dist/bin/${cmd}${ext}" "./cmd/${cmd}"
           done
+          if [ "$GOOS" = darwin ]; then packaging/macos/check-compat.sh dist/bin/rmtd dist/bin/rmt; fi
 
       - name: Set up eSigner (CodeSignTool, pinned)
         if: matrix.goos == 'windows' && env.HAS_ESIGNER == 'true'
@@ -255,6 +259,7 @@ jobs:
               -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$RUNNER_TEMP/rmtd-$a" ../rmtd
           done
           lipo -create -output build/bin/rmt-desk.app/Contents/MacOS/rmtd "$RUNNER_TEMP/rmtd-arm64" "$RUNNER_TEMP/rmtd-amd64"
+          ../../packaging/macos/check-compat.sh build/bin/rmt-desk.app/Contents/MacOS/*
       - name: Sign (Developer ID, or ad-hoc without a certificate)
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}

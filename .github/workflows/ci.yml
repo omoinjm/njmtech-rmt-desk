@@ -16,6 +16,11 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build -o bin/ ./cmd/...
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+      - name: macOS 11 compatibility (deployment target, no hard ScreenCaptureKit link)
+        if: runner.os == 'macOS'
+        run: packaging/macos/check-compat.sh bin/rmtd bin/rmt
 
       # The desktop app only really compiles with Wails' build tags (without
       # them it builds a stub), which need the platform web view headers.
